@@ -5,8 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Auto Ticket Resolver</title>
 <style>
-  :root { --bg:#f7f7f8; --card:#fff; --fg:#1d1d1f; --muted:#6b6b73; --line:#e3e3e8; --accent:#9a1f40; --ok:#1f7a3f; --warn:#a15c00; --bad:#b3261e; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#151517; --card:#1f1f23; --fg:#ececf0; --muted:#9a9aa3; --line:#33333a; --accent:#e0607e; --ok:#5cc489; --warn:#e3a54a; --bad:#f2786f; } }
+  :root { color-scheme: light; --bg:#f7f7f8; --card:#fff; --fg:#1d1d1f; --muted:#6b6b73; --line:#e3e3e8; --accent:#9a1f40; --link:#9a1f40; --ok:#1f7a3f; --warn:#a15c00; --bad:#b3261e; }
+  /* Dark when the system asks for it (unless Light was chosen), or when Dark was chosen. */
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --bg:#151517; --card:#1f1f23; --fg:#ececf0; --muted:#9a9aa3; --line:#33333a; --accent:#c8466a; --link:#f08aa4; --ok:#5cc489; --warn:#e3a54a; --bad:#f2786f; } }
+  :root[data-theme="dark"] { color-scheme: dark; --bg:#151517; --card:#1f1f23; --fg:#ececf0; --muted:#9a9aa3; --line:#33333a; --accent:#c8466a; --link:#f08aa4; --ok:#5cc489; --warn:#e3a54a; --bad:#f2786f; }
+  a { color: var(--link); text-underline-offset: 2px; }
+  a:hover { text-decoration-thickness: 2px; }
+  .head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px; }
+  .head h1 { margin:0; }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
   main { max-width:1100px; margin:0 auto; padding:20px 16px 40px; }
@@ -32,7 +38,10 @@
 </head>
 <body>
 <main>
-  <h1>Auto Ticket Resolver</h1>
+  <div class="head">
+    <h1>Auto Ticket Resolver</h1>
+    <button id="theme" title="Theme: follow the system, light or dark">Theme: Auto</button>
+  </div>
 
   <div class="card">
     <div class="grid">
@@ -41,25 +50,34 @@
       <div><label for="mainApp">Main app / repo folder (optional)</label><input id="mainApp" placeholder="icicif" /></div>
       <div><label for="assignee">Assignee filter (optional)</label><input id="assignee" placeholder="email, name or me" /></div>
       <div><label for="createdBy">Created-by filter (optional)</label><input id="createdBy" placeholder="email, name or me" /></div>
+      <div><label for="model">Claude model (optional)</label><input id="model" placeholder="CLI default, e.g. claude-opus-5-5" /></div>
       <div><label for="testCommand">Test command (optional gate)</label><input id="testCommand" placeholder="npm test" /></div>
       <div><label for="limit">Max tickets (0 = all)</label><input id="limit" type="number" min="0" value="0" /></div>
+      <div><label for="only">Only these tickets (optional)</label><input id="only" placeholder="TASK-2026-02411, TASK-2026-02617" /></div>
+      <div><label for="progress">Progress summary every N min (0 = off)</label><input id="progress" type="number" min="0" value="5" /></div>
     </div>
     <div style="margin-top:12px">
       <label for="cookie">Hub session cookie <span id="cookieHint" class="muted"></span></label>
       <textarea id="cookie" placeholder="sid=…; system_user=yes; full_name=…  (or just the sid value)"></textarea>
+      <label for="cookieFile" style="margin-top:8px">…or a cookie file path</label>
+      <input id="cookieFile" placeholder="/home/you/cookie.txt" />
     </div>
     <div class="row">
       <label class="check"><input type="checkbox" id="hubWrite" checked /> Update Hub (stages + clarification comments)</label>
       <label class="check"><input type="checkbox" id="force" /> Redo tickets handled in earlier runs</label>
+      <label class="check"><input type="checkbox" id="fixPre" checked /> Fix pre-existing test failures after the tickets</label>
     </div>
     <div class="row">
       <button id="inspect">Inspect queue</button>
       <button id="preview">Dry run (download context only)</button>
       <button id="start" class="primary">Start resolving</button>
+      <button id="fixFailures">Fix pre-existing failures only</button>
       <button id="stop">Stop after current ticket</button>
       <span id="msg" class="muted"></span>
     </div>
   </div>
+
+  <div class="card" id="lockBanner" hidden style="border-color:var(--warn)"></div>
 
   <div class="card">
     <div class="row" style="margin-top:0;justify-content:space-between">
@@ -78,11 +96,30 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
+
+// Theme: auto (system) → light → dark, remembered in this browser only.
+const THEMES = ['auto', 'light', 'dark'];
+function applyTheme(t) {
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', t);
+  $('theme').textContent = `Theme: ${t[0].toUpperCase()}${t.slice(1)}`;
+}
+let theme = 'auto';
+try { theme = THEMES.includes(localStorage.getItem('atr:theme')) ? localStorage.getItem('atr:theme') : 'auto'; } catch { /* storage blocked */ }
+applyTheme(theme);
+$('theme').onclick = () => {
+  theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  applyTheme(theme);
+  try { localStorage.setItem('atr:theme', theme); } catch { /* storage blocked */ }
+};
 const body = (extra = {}) => ({
   project: $('project').value.trim(), repoPath: $('repoPath').value.trim(), mainApp: $('mainApp').value.trim() || undefined,
   assignee: $('assignee').value.trim() || undefined, createdBy: $('createdBy').value.trim() || undefined, cookie: $('cookie').value.trim() || undefined,
   testCommand: $('testCommand').value.trim() || undefined, limit: Number($('limit').value) || 0,
-  hubWrite: $('hubWrite').checked, force: $('force').checked, ...extra,
+  hubWrite: $('hubWrite').checked, force: $('force').checked, fixPreexisting: $('fixPre').checked,
+  only: $('only').value.trim() || undefined, progressIntervalMinutes: $('progress').value,
+  model: $('model').value.trim() || undefined, cookieFile: $('cookieFile').value.trim() || undefined,
+  ...extra,
 });
 const post = async (url, data) => {
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
@@ -116,6 +153,11 @@ const start = (dryRun) => async () => {
 };
 $('preview').onclick = start(true);
 $('start').onclick = start(false);
+$('fixFailures').onclick = async () => {
+  if (!confirm('Fix the recorded pre-existing test failures? Each gets its own branch, pushed and merged into local development.')) return;
+  try { await post('/api/runs', body({ onlyPreexisting: true })); $('msg').textContent = 'Started.'; $('log').textContent = ''; listen(); }
+  catch (e) { $('msg').textContent = e.message; }
+};
 $('stop').onclick = () => post('/api/runs/current/stop', {});
 
 let es;
@@ -133,14 +175,19 @@ async function poll() {
     const s = await (await fetch('/api/runs/current')).json();
     $('phase').textContent = s.phase === 'idle' ? 'Idle' : `${s.dryRun ? 'Dry run' : 'Run'} — ${s.phase}${s.project ? ' · ' + s.project : ''}${s.error ? ' · ' + s.error : ''}`;
     if (s.queue?.length) renderQueue(s.queue, s.done, s.current);
-    $('start').disabled = $('preview').disabled = ['starting', 'running'].includes(s.phase);
+    const locks = await (await fetch('/api/locks')).json();
+    const others = locks.filter((l) => !l.mine);
+    $('lockBanner').hidden = !others.length;
+    $('lockBanner').innerHTML = others.map((l) => `⚠ Another run is active — <b>${esc(l.owner)}</b> (pid ${l.pid}, since ${esc(new Date(l.startedAt).toLocaleString())}).<div class="muted">${l.paths.map(esc).join('<br>')}</div>`).join('<hr>');
+    const busy = ['starting', 'running'].includes(s.phase);
+    $('start').disabled = $('preview').disabled = $('fixFailures').disabled = busy;
     for (const id of ['r1', 'r2', 'r3', 'r4']) { const a = $(id); const u = new URL(a.href); if (s.project) u.searchParams.set('project', s.project); a.href = u; }
   } catch { /* server restarting */ }
 }
 
 fetch('/api/defaults').then((r) => r.json()).then((d) => {
-  $('project').value = d.project || ''; $('repoPath').value = d.repoPath || ''; $('mainApp').value = d.mainApp || ''; $('testCommand').value = d.testCommand || '';
-  $('cookieHint').textContent = d.hasCookie ? '(leave empty to use HUB_COOKIE from .env)' : '';
+  $('project').value = d.project || ''; $('repoPath').value = d.repoPath || ''; $('mainApp').value = d.mainApp || ''; $('model').value = d.model || ''; $('cookieFile').value = d.cookieFile || ''; $('testCommand').value = d.testCommand || '';
+  $('cookieHint').textContent = d.hasCookie ? '(leave both empty to use the cookie from .env)' : '';
 });
 listen(); poll(); setInterval(poll, 3000);
 </script>

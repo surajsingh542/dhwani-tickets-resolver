@@ -3,6 +3,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { HubClient } from './hubClient.js';
 import { RepoSet } from './repoSet.js';
+import { acquireLocks } from './lock.js';
 import { ClaudeSession, parseResult } from './claudeSession.js';
 import { buildQueue, distinctValues, matchStage } from './ticketQueue.js';
 import { buildTicketContext } from './contextBuilder.js';
@@ -63,11 +64,15 @@ export class TicketResolver extends EventEmitter {
     let repos;
     try {
       await this.connect();
+      const owner = `${cfg.owner || 'cli'} ${cfg.onlyPreexisting ? 'fix-failures' : cfg.dryRun ? 'preview' : 'run'} ${cfg.project}`;
+      if (cfg.dryRun) this.releaseLocks = acquireLocks([this.ws.root], { owner });
       if (!cfg.dryRun) {
         repos = new RepoSet({
           root: cfg.repoPath, baseBranch: cfg.baseBranch, remote: cfg.gitRemote, mainApp: cfg.mainApp, logger: this.logger,
           snapshotDir: path.join(this.ws.root, 'snapshots', new Date().toISOString().replace(/[:.]/g, '-')),
         });
+        // Lock every repository found (and the project workspace) before any git command runs.
+        this.releaseLocks = acquireLocks([this.ws.root, ...repos.repos.map((r) => r.dir)], { owner });
         await repos.preflight();
       }
 
@@ -133,8 +138,11 @@ export class TicketResolver extends EventEmitter {
   async finish({ session, repos } = {}) {
     if (this.progressTimer) clearInterval(this.progressTimer);
     session?.close();
-    if (repos) await repos.restoreOriginalBranches();
-    if (!this.cfg.dryRun) await this.queueReportWrite();
+    // Only a run that holds the locks may touch the repositories on the way out.
+    if (repos && this.releaseLocks) await repos.restoreOriginalBranches();
+    if (!this.cfg.dryRun && this.releaseLocks) await this.queueReportWrite();
+    this.releaseLocks?.();
+    this.releaseLocks = null;
     this.status.phase = 'finished';
     this.status.current = null;
     this.status.finishedAt = new Date().toISOString();

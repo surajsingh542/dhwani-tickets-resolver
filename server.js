@@ -2,9 +2,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { buildConfig, projectWorkspace } from './src/config.js';
+import { buildConfig, projectWorkspace, readCookieFile } from './src/config.js';
 import { TicketResolver } from './src/resolver.js';
 import { REPORT_FILES } from './src/reporter.js';
+import { listLocks } from './src/lock.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -20,19 +21,23 @@ const configFrom = (body = {}, extra = {}) =>
     mainApp: body.mainApp,
     assigneeFilter: body.assignee ? String(body.assignee).split(',').map((s) => s.trim()).filter(Boolean) : undefined,
     createdByFilter: body.createdBy ? String(body.createdBy).split(',').map((s) => s.trim()).filter(Boolean) : undefined,
-    cookie: body.cookie,
+    cookie: body.cookie || (body.cookieFile ? readCookieFile(body.cookieFile) : undefined),
+    claudeModel: body.model,
     limit: body.limit ? Number(body.limit) : undefined,
     only: body.only ? String(body.only).split(',').map((s) => s.trim()).filter(Boolean) : undefined,
     force: body.force ? true : undefined,
     hubWrite: body.hubWrite === false ? false : undefined,
     testCommand: body.testCommand,
+    fixPreexisting: body.fixPreexisting === false ? false : undefined,
+    progressIntervalMinutes: body.progressIntervalMinutes !== undefined && body.progressIntervalMinutes !== '' ? Number(body.progressIntervalMinutes) : undefined,
+    owner: 'dashboard',
     ...extra,
   });
 
 // Defaults from .env so the form can be prefilled (never the cookie).
 app.get('/api/defaults', (_req, res) => {
   const c = buildConfig();
-  res.json({ project: c.project, repoPath: c.repoPath, mainApp: c.mainApp, baseBranch: c.baseBranch, testCommand: c.testCommand, hasCookie: Boolean(c.cookie) });
+  res.json({ project: c.project, repoPath: c.repoPath, mainApp: c.mainApp, model: c.claudeModel || '', cookieFile: process.env.HUB_COOKIE_FILE || '', baseBranch: c.baseBranch, testCommand: c.testCommand, hasCookie: Boolean(c.cookie) });
 });
 
 app.post('/api/inspect', async (req, res) => {
@@ -46,7 +51,7 @@ app.post('/api/inspect', async (req, res) => {
 app.post('/api/runs', (req, res) => {
   if (active && active.resolver.status.phase !== 'finished') return res.status(409).json({ error: 'A run is already in progress.' });
   try {
-    const cfg = configFrom(req.body, { dryRun: Boolean(req.body.dryRun) });
+    const cfg = configFrom(req.body, { dryRun: Boolean(req.body.dryRun), onlyPreexisting: Boolean(req.body.onlyPreexisting) });
     const resolver = new TicketResolver(cfg);
     const promise = resolver.run().catch(() => {});
     active = { resolver, cfg, promise };
@@ -60,6 +65,13 @@ app.get('/api/runs/current', (_req, res) => {
   if (!active) return res.json({ phase: 'idle' });
   const { resolver, cfg } = active;
   res.json({ ...resolver.status, project: cfg.project, repoPath: cfg.repoPath, dryRun: cfg.dryRun });
+});
+
+// Runs holding locks right now — including ones started from the terminal.
+app.get('/api/locks', (_req, res) => {
+  const byPid = {};
+  for (const l of listLocks()) (byPid[l.pid] ||= { pid: l.pid, owner: l.owner, startedAt: l.startedAt, paths: [] }).paths.push(l.path);
+  res.json(Object.values(byPid).map((r) => ({ ...r, mine: r.pid === process.pid })));
 });
 
 app.post('/api/runs/current/stop', (_req, res) => {

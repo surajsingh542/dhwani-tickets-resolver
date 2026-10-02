@@ -73,11 +73,12 @@ export function buildConfig(overrides = {}) {
     testTimeoutMinutes: int(env.TEST_TIMEOUT_MINUTES, 20),
     maxFixAttempts: int(env.MAX_FIX_ATTEMPTS, 1),
     ticketTimeoutMinutes: int(env.TICKET_TIMEOUT_MINUTES, 60),
-    progressIntervalMinutes: Number(env.PROGRESS_INTERVAL_MINUTES ?? 5),
+    progressIntervalMinutes: int(env.PROGRESS_INTERVAL_MINUTES, 5),
 
     maxDownloadMb: int(env.MAX_DOWNLOAD_MB, 25),
     fetchExternalLinks: bool(env.FETCH_EXTERNAL_LINKS, true),
 
+    owner: 'cli',
     dryRun: false,
     limit: 0,
     only: [],

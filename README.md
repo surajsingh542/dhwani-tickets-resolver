@@ -112,8 +112,25 @@ Other flags: `--only ID1,ID2`, `--force`, `--model <id>`, `--progress-interval <
 npm start   # http://127.0.0.1:3000
 ```
 
-The dashboard has a form for the project, repo path and cookie, buttons for inspect / dry run / start / stop,
-a live queue with per-ticket outcomes, a streaming log, and links to download the three reports.
+The CLI and the dashboard are two front ends for the same engine. They share `.env`, the workspace,
+`state.json` and the reports, so a ticket handled from one is skipped by the other. The dashboard offers:
+
+- **Fields:** project, repo path, main app, assignee and created-by filters, test command, max tickets, specific
+  ticket IDs, progress-summary interval, cookie.
+- **Checkboxes:** update the Hub, redo handled tickets, fix pre-existing failures after the tickets.
+- **Buttons:** Inspect, Dry run, Start resolving, Fix pre-existing failures only, Stop after the current ticket.
+- **Live view:** the queue with each ticket's outcome, a streaming log, and download links for the four reports.
+
+A dashboard run lives inside the server process, so stopping the server stops the run.
+
+### One run at a time
+
+Before any git command, a run locks every repository it found, plus the project's workspace. The lock files live
+in `~/.cache/auto-ticket-resolver/locks/`, never inside your repos. A second run that touches any of the same
+repos refuses to start and names the run holding the lock; this covers CLI vs CLI, CLI vs dashboard, and
+overlapping folders such as `ICICIF/` vs `ICICIF/dhwani-bench/apps/icicif`. Locks are released when the run
+ends, and a lock left by a crashed run is taken over automatically. The dashboard shows a banner while a terminal
+run is active.
 
 ## Configuration (.env)
 
