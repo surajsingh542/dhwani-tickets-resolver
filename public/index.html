@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Auto Ticket Resolver</title>
+<style>
+  :root { --bg:#f7f7f8; --card:#fff; --fg:#1d1d1f; --muted:#6b6b73; --line:#e3e3e8; --accent:#9a1f40; --ok:#1f7a3f; --warn:#a15c00; --bad:#b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151517; --card:#1f1f23; --fg:#ececf0; --muted:#9a9aa3; --line:#33333a; --accent:#e0607e; --ok:#5cc489; --warn:#e3a54a; --bad:#f2786f; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:1100px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:20px; margin:0 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
+  label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+  input, textarea { width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
+  textarea { min-height:60px; font-family:ui-monospace, monospace; font-size:12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
+  button { padding:8px 14px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; font:inherit; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  .check { display:flex; gap:6px; align-items:center; color:var(--fg); font-size:13px; }
+  .check input { width:auto; }
+  #log { height:380px; overflow:auto; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; font:12px/1.4 ui-monospace, monospace; white-space:pre-wrap; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .resolved { color:var(--ok); } .needs_clarification { color:var(--warn); } .failed { color:var(--bad); }
+  .muted { color:var(--muted); }
+  .tablewrap { overflow-x:auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Auto Ticket Resolver</h1>
+
+  <div class="card">
+    <div class="grid">
+      <div><label for="project">Hub project</label><input id="project" placeholder="ICIC/P382-02" /></div>
+      <div><label for="repoPath">Local repository path</label><input id="repoPath" placeholder="/home/you/code/project" /></div>
+      <div><label for="mainApp">Main app / repo folder (optional)</label><input id="mainApp" placeholder="icicif" /></div>
+      <div><label for="assignee">Assignee filter (optional)</label><input id="assignee" placeholder="email, name or me" /></div>
+      <div><label for="createdBy">Created-by filter (optional)</label><input id="createdBy" placeholder="email, name or me" /></div>
+      <div><label for="testCommand">Test command (optional gate)</label><input id="testCommand" placeholder="npm test" /></div>
+      <div><label for="limit">Max tickets (0 = all)</label><input id="limit" type="number" min="0" value="0" /></div>
+    </div>
+    <div style="margin-top:12px">
+      <label for="cookie">Hub session cookie <span id="cookieHint" class="muted"></span></label>
+      <textarea id="cookie" placeholder="sid=…; system_user=yes; full_name=…  (or just the sid value)"></textarea>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="hubWrite" checked /> Update Hub (stages + clarification comments)</label>
+      <label class="check"><input type="checkbox" id="force" /> Redo tickets handled in earlier runs</label>
+    </div>
+    <div class="row">
+      <button id="inspect">Inspect queue</button>
+      <button id="preview">Dry run (download context only)</button>
+      <button id="start" class="primary">Start resolving</button>
+      <button id="stop">Stop after current ticket</button>
+      <span id="msg" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-top:0;justify-content:space-between">
+      <strong id="phase">Idle</strong>
+      <span>
+        <a href="/api/reports/resolved" id="r1">Resolved.xlsx</a> ·
+        <a href="/api/reports/clarification" id="r2">Clarification.xlsx</a> ·
+        <a href="/api/reports/notResolved" id="r3">Not resolved.xlsx</a> ·
+        <a href="/api/reports/preexisting" id="r4">Pre-existing failures.xlsx</a>
+      </span>
+    </div>
+    <div class="tablewrap"><table id="queue"><thead><tr><th>#</th><th>Ticket</th><th>Priority</th><th>Type</th><th>Stage</th><th>Outcome</th></tr></thead><tbody></tbody></table></div>
+  </div>
+
+  <div class="card"><div id="log"></div></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const body = (extra = {}) => ({
+  project: $('project').value.trim(), repoPath: $('repoPath').value.trim(), mainApp: $('mainApp').value.trim() || undefined,
+  assignee: $('assignee').value.trim() || undefined, createdBy: $('createdBy').value.trim() || undefined, cookie: $('cookie').value.trim() || undefined,
+  testCommand: $('testCommand').value.trim() || undefined, limit: Number($('limit').value) || 0,
+  hubWrite: $('hubWrite').checked, force: $('force').checked, ...extra,
+});
+const post = async (url, data) => {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j;
+};
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+function renderQueue(queue, done = [], current) {
+  const outcomes = Object.fromEntries(done.map((d) => [d.id, d]));
+  $('queue').querySelector('tbody').innerHTML = queue.map((q, i) => {
+    const d = outcomes[q.id];
+    const out = d ? `<span class="${d.outcome}">${esc(d.outcome)}</span>${d.error ? `<div class="muted">${esc(d.error.split('\n')[0])}</div>` : ''}`
+      : current?.id === q.id ? `<em>${esc(current.step)}</em>` : '';
+    return `<tr><td>${i + 1}</td><td>${esc(q.id)}<div class="muted">${esc(q.subject)}</div></td><td>${esc(q.priority || q.priorityKey)}</td><td>${esc(q.type)}</td><td>${esc(q.stage)}</td><td>${out}</td></tr>`;
+  }).join('');
+}
+
+$('inspect').onclick = async () => {
+  $('msg').textContent = 'Inspecting…';
+  try {
+    const r = await post('/api/inspect', body());
+    renderQueue(r.queue);
+    $('msg').textContent = `${r.totalTickets} tickets, ${r.queue.length} pickable, ${r.skipped.length} skipped. Stages: ${(r.pipelineStages || []).join(', ')}`;
+    $('log').textContent = JSON.stringify({ distinct: r.distinct, skipped: r.skipped }, null, 2);
+  } catch (e) { $('msg').textContent = e.message; }
+};
+const start = (dryRun) => async () => {
+  if (!dryRun && !confirm('Start resolving? Claude will edit the repository, ticket branches will be pushed, and Hub stages will change.')) return;
+  try { await post('/api/runs', body({ dryRun })); $('msg').textContent = 'Started.'; $('log').textContent = ''; listen(); }
+  catch (e) { $('msg').textContent = e.message; }
+};
+$('preview').onclick = start(true);
+$('start').onclick = start(false);
+$('stop').onclick = () => post('/api/runs/current/stop', {});
+
+let es;
+function listen() {
+  es?.close();
+  es = new EventSource('/api/runs/current/events');
+  es.onmessage = (ev) => {
+    const log = $('log'); const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+    log.textContent += JSON.parse(ev.data) + '\n'; if (atBottom) log.scrollTop = log.scrollHeight;
+  };
+}
+
+async function poll() {
+  try {
+    const s = await (await fetch('/api/runs/current')).json();
+    $('phase').textContent = s.phase === 'idle' ? 'Idle' : `${s.dryRun ? 'Dry run' : 'Run'} — ${s.phase}${s.project ? ' · ' + s.project : ''}${s.error ? ' · ' + s.error : ''}`;
+    if (s.queue?.length) renderQueue(s.queue, s.done, s.current);
+    $('start').disabled = $('preview').disabled = ['starting', 'running'].includes(s.phase);
+    for (const id of ['r1', 'r2', 'r3', 'r4']) { const a = $(id); const u = new URL(a.href); if (s.project) u.searchParams.set('project', s.project); a.href = u; }
+  } catch { /* server restarting */ }
+}
+
+fetch('/api/defaults').then((r) => r.json()).then((d) => {
+  $('project').value = d.project || ''; $('repoPath').value = d.repoPath || ''; $('mainApp').value = d.mainApp || ''; $('testCommand').value = d.testCommand || '';
+  $('cookieHint').textContent = d.hasCookie ? '(leave empty to use HUB_COOKIE from .env)' : '';
+});
+listen(); poll(); setInterval(poll, 3000);
+</script>
+</body>
+</html>
