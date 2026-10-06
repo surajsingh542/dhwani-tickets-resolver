@@ -224,7 +224,9 @@ export class TicketResolver extends EventEmitter {
     const count = (o) => done.filter((d) => d.outcome === o).length;
     const elapsed = Date.now() - this.runStartedAt;
     const remaining = total - done.length;
-    const eta = done.length ? fmt((elapsed / done.length) * remaining) : 'n/a until the first ticket finishes';
+    const eta = this.stopRequested
+      ? `stop requested — finishing ${(this.status.running || []).length} ticket(s) in progress, then stopping (the other ${Math.max(0, remaining - (this.status.running || []).length)} wait for the next run)`
+      : done.length ? fmt((elapsed / done.length) * remaining) : 'n/a until the first ticket finishes';
     const running = this.status.running || [];
     const last = this.lastClaudeLine ? this.lastClaudeLine.replace(/^\S+ \[CLAUDE\] /, '').split('\n')[0].slice(0, 160) : '—';
     return [
@@ -234,7 +236,7 @@ export class TicketResolver extends EventEmitter {
       ...(running.length
         ? running.flatMap((cur) => [`│  Now: ${cur.id} — ${String(cur.subject).slice(0, 80)}`, `│       step: ${cur.step} · on this ticket for ${fmt(Date.now() - cur.startedAt)}`])
         : ['│  Now: (between tickets)']),
-      this.cfg.parallel && this.lane.waiting ? `│  Merge queue: ${this.lane.waiting} ticket(s) waiting` : null,
+      this.cfg.parallel ? `│  Merge queue: ${(this.status.running || []).filter((c) => /^(claude: verifying in the bench|merge queue|git(\[|:))/.test(c.step)).length ? '1 in progress' : 'idle'}, ${this.lane.waiting} waiting` : null,
       `│  Last Claude activity: ${last}`,
       `│  ETA: ${eta}${this.sessions.length ? ` · Claude cost so far ≈ $${this.claudeCost().toFixed(2)}` : ''}`,
       '└─',
@@ -431,7 +433,7 @@ export class TicketResolver extends EventEmitter {
     for (const t of trees) await t.git.run('checkout', '--detach');
     const changedNames = new Set(changed.map((t) => t.repo.name));
 
-    this.step(`waiting for the merge queue${this.lane.waiting ? ` (${this.lane.waiting} ahead)` : ''}`);
+    this.step('waiting for the merge queue');
     try {
       return await this.lane.run(() => this.verifyAndMergeInLane({ ...args, changedNames, result, timeoutMs }));
     } finally {
@@ -496,7 +498,9 @@ export class TicketResolver extends EventEmitter {
         await r.git.run('reset', '--mixed', cfg.baseBranch);
       }
       this.step(`claude: verifying in the bench — ${repos.repos.filter((r) => changedNames.has(r.name)).map((r) => r.dir).join(', ')} on ${branch} (built on the latest ${cfg.baseBranch})`);
-      result = await this.ask(session, this.laneVerifyPrompt(item, repos, changedNames, branch), timeoutMs);
+      // Time-boxed: the whole merge queue waits on this turn.
+      result = await this.ask(session, this.laneVerifyPrompt(item, repos, changedNames, branch), this.cfg.laneVerifyMinutes * 60000)
+        .catch((e) => { if (/exceeded/i.test(e.message)) throw new Error(`bench verification took longer than ${this.cfg.laneVerifyMinutes} min (LANE_VERIFY_MINUTES); the work is saved as a patch for the next attempt`); throw e; });
       return await this.shipResolved({ session, repos, item, record, branch, verifyPrompt, commitTitle, onClarification, onNoChange, abandon, created, result, timeoutMs });
     } catch (e) {
       if (e.usageLimit || isSessionCrash(e)) { await abandon('interrupted', { error: `${e.message} — will be retried` }); throw e; }
@@ -549,9 +553,12 @@ The worktree is gone — work here now. The bench runs this code, and bench comm
 \`${this.cfg.baseBranch}\` may have gained other tickets since you started (\`git log --oneline -15 ${this.cfg.baseBranch}\`).
 
 1. Read \`git diff\`: it should be exactly your change. Check it still makes sense next to the recently merged work.
-2. Run the relevant bench tests (and \`bench migrate\` / \`bench build\` if your change needs them) and the repository's
-   pre-commit hooks; fix anything that fails. Prove that any failure you leave also fails without your change.
-3. Leave the changes uncommitted and finish with the RESULT_JSON block.`;
+2. Run the bench tests for the modules that cover the files you changed (and \`bench migrate\` / \`bench build\` if your
+   change needs them) plus the repository's pre-commit hooks on those files; fix anything your change breaks.
+3. Be quick: the merge queue is blocked while you work, so other tickets are waiting. Do not run whole slow suites
+   that your change does not touch, and do not investigate failures in modules you did not change — list them in
+   tests.preexisting_failures (they get their own fix later). You have about ${this.cfg.laneVerifyMinutes} minutes.
+4. Leave the changes uncommitted and finish with the RESULT_JSON block.`;
   }
 
   /** Restores read-only repos that changed (e.g. `bench migrate` rewriting framework files). Never stops the run. */

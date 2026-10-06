@@ -78,6 +78,8 @@ export function buildConfig(overrides = {}) {
     // A new Claude conversation for every ticket (tickets are independent; saves tokens). false = one for the whole run.
     sessionPerTicket: bool(env.SESSION_PER_TICKET, true),
     maxConcurrent: int(env.MAX_CONCURRENT, 3),
+    // Parallel mode: time box for Claude's bench-verification turn in the merge queue (everyone else waits on it).
+    laneVerifyMinutes: int(env.LANE_VERIFY_MINUTES, 30),
     // When Claude's usage limit is hit: pause until the reported reset time, then continue (false = stop the run).
     waitOnUsageLimit: bool(env.WAIT_ON_USAGE_LIMIT, true),
     progressIntervalMinutes: int(env.PROGRESS_INTERVAL_MINUTES, 5),
