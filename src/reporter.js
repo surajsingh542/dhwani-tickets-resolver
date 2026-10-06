@@ -102,8 +102,8 @@ export async function writeReports(state, reportsDir, cfg) {
       { header: 'Hub update', key: 'hub', width: 30 }, { header: 'Downloaded context', key: 'folder', width: 40 },
       { header: 'Processed at', key: 'processedAt', width: 22 },
     ],
-    all.filter((r) => r.outcome === 'needs_clarification').map((r) => ({
-      ...base(r), stageAfter: r.stageAfter, why: r.result?.summary, missing: r.result?.missing_context,
+    all.filter((r) => r.outcome === 'needs_clarification' || r.outcome === 'no_change_needed').map((r) => ({
+      ...base(r), stageAfter: r.stageAfter, why: `${r.outcome === 'no_change_needed' ? 'No change needed — ' : ''}${r.result?.summary || ''}`, missing: r.result?.missing_context,
       questions: numbered(r.result?.questions), posted: r.commentPosted ? 'yes' : 'no', hub: r.hubUpdate,
     })),
   );
@@ -118,7 +118,7 @@ export async function writeReports(state, reportsDir, cfg) {
       { header: 'Claude summary', key: 'summary', width: 60 }, { header: 'Branch', key: 'branch', width: 24 },
       { header: 'Ticket folder', key: 'folder', width: 40 }, { header: 'Processed at', key: 'processedAt', width: 22 },
     ],
-    all.filter((r) => r.outcome === 'failed').map((r) => ({
+    all.filter((r) => r.outcome === 'failed' || r.outcome === 'interrupted').map((r) => ({
       ...base(r), reason: [r.error, ...(r.warnings || []).map((w) => `⚠ ${w}`)].filter(Boolean).join('\n'), summary: r.result?.summary,
       branch: r.branchKept ? `${r.branch} (kept in ${(r.repos || []).map((x) => x.name).join(', ') || 'repo'})` : '',
     })),
@@ -138,7 +138,7 @@ export async function writeReports(state, reportsDir, cfg) {
     ],
     pre.map((r) => ({
       failure: r.failure, tickets: (r.reportedBy || []).join(', '),
-      outcome: { resolved: 'fixed', needs_clarification: 'needs clarification', failed: 'not fixed' }[r.outcome] || r.outcome,
+      outcome: { resolved: 'fixed', needs_clarification: 'needs clarification', no_change_needed: 'no change needed', failed: 'not fixed', interrupted: 'interrupted (retried next run)' }[r.outcome] || r.outcome,
       branch: r.outcome === 'resolved' || r.branchKept ? r.branch : '',
       commit: perRepo(r, (x) => `${x.name}: ${x.commit?.slice(0, 10)}`), merge: perRepo(r, (x) => `${x.name}: ${x.mergeCommit?.slice(0, 10) || '—'}`),
       rootCause: r.result?.root_cause, summary: r.result?.summary, files: perRepo(r, (x) => x.files.map((f) => `${x.name}/${f}`).join('\n')),

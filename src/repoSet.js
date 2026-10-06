@@ -170,6 +170,7 @@ export class RepoSet {
       }
     }
 
+    this.ready = true; // from here on the writable repos are ours to put back at the end
     const ro = this.readOnlyRepos.map((r) => r.name + (r.dirtyAtStart ? ' (has local changes, left untouched)' : ''));
     if (ro.length) this.logger.info(`Read-only context: ${ro.join(', ')}`);
     this.logger.info(`Writable repositories (${this.repos.length}): ${this.repos.map((r) => `${r.name}${r === this.main ? ' [MAIN]' : ''} (was on ${r.originalBranch})`).join(', ')}`);
@@ -283,6 +284,8 @@ export class RepoSet {
 
   /** End of run: put every writable repo back on the branch it was on before the run. */
   async restoreOriginalBranches() {
+    // A preflight that failed has already put back whatever it touched; read-only repos are never switched.
+    if (!this.ready) return;
     for (const r of this.repos) {
       if (!r.originalBranch || r.originalBranch === 'HEAD') continue;
       if (!(await r.git.isClean())) { this.logger.warn(`${r.name}: not clean, leaving it on its current branch.`); continue; }

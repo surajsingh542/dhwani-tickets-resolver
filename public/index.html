@@ -68,6 +68,17 @@
       <label class="check"><input type="checkbox" id="fixPre" checked /> Fix pre-existing test failures after the tickets</label>
     </div>
     <div class="row">
+      <span class="muted">Priorities:</span><span id="prioBoxes" class="row" style="margin:0"></span>
+    </div>
+    <div class="row">
+      <span class="muted">Types:</span><span id="typeBoxes" class="row" style="margin:0"></span>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="parallel" /> Work on tickets in parallel (separate worktrees; bench checks and merges stay one at a time)</label>
+      <label class="check">Max concurrent <input type="number" id="maxConcurrent" min="1" max="10" value="3" style="width:70px" /></label>
+      <label class="check"><input type="checkbox" id="perTicket" checked /> New Claude session for every ticket (fewer tokens)</label>
+    </div>
+    <div class="row">
       <button id="inspect">Inspect queue</button>
       <button id="preview">Dry run (download context only)</button>
       <button id="start" class="primary">Start resolving</button>
@@ -78,6 +89,7 @@
   </div>
 
   <div class="card" id="lockBanner" hidden style="border-color:var(--warn)"></div>
+  <div class="card" id="errorBanner" hidden style="border-color:var(--bad);color:var(--bad)"></div>
 
   <div class="card">
     <div class="row" style="margin-top:0;justify-content:space-between">
@@ -119,6 +131,10 @@ const body = (extra = {}) => ({
   hubWrite: $('hubWrite').checked, force: $('force').checked, fixPreexisting: $('fixPre').checked,
   only: $('only').value.trim() || undefined, progressIntervalMinutes: $('progress').value,
   model: $('model').value.trim() || undefined, cookieFile: $('cookieFile').value.trim() || undefined,
+  parallel: $('parallel').checked, maxConcurrent: Number($('maxConcurrent').value) || undefined,
+  sessionPerTicket: $('perTicket').checked,
+  priorities: [...document.querySelectorAll('#prioBoxes input:checked')].map((i) => i.value),
+  types: [...document.querySelectorAll('#typeBoxes input:checked')].map((i) => i.value),
   ...extra,
 });
 const post = async (url, data) => {
@@ -127,12 +143,12 @@ const post = async (url, data) => {
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
-function renderQueue(queue, done = [], current) {
+function renderQueue(queue, done = [], running = []) {
   const outcomes = Object.fromEntries(done.map((d) => [d.id, d]));
   $('queue').querySelector('tbody').innerHTML = queue.map((q, i) => {
     const d = outcomes[q.id];
     const out = d ? `<span class="${d.outcome}">${esc(d.outcome)}</span>${d.error ? `<div class="muted">${esc(d.error.split('\n')[0])}</div>` : ''}`
-      : current?.id === q.id ? `<em>${esc(current.step)}</em>` : '';
+      : (running || []).find((c) => c.id === q.id) ? `<em>${esc(running.find((c) => c.id === q.id).step)}</em>` : '';
     return `<tr><td>${i + 1}</td><td>${esc(q.id)}<div class="muted">${esc(q.subject)}</div></td><td>${esc(q.priority || q.priorityKey)}</td><td>${esc(q.type)}</td><td>${esc(q.stage)}</td><td>${out}</td></tr>`;
   }).join('');
 }
@@ -174,7 +190,16 @@ async function poll() {
   try {
     const s = await (await fetch('/api/runs/current')).json();
     $('phase').textContent = s.phase === 'idle' ? 'Idle' : `${s.dryRun ? 'Dry run' : 'Run'} — ${s.phase}${s.project ? ' · ' + s.project : ''}${s.error ? ' · ' + s.error : ''}`;
-    if (s.queue?.length) renderQueue(s.queue, s.done, s.current);
+    if (s.queue?.length) renderQueue(s.queue, s.done, s.running || (s.current ? [s.current] : []));
+    // Why the run stopped / could not start, or why it is waiting — impossible to miss.
+    const banner = $('errorBanner');
+    if (s.phase === 'paused' && s.pausedUntil) {
+      banner.hidden = false; banner.style.color = 'var(--warn)'; banner.style.borderColor = 'var(--warn)';
+      banner.textContent = `⏸ Paused: Claude usage limit reached. Resuming automatically at ${new Date(s.pausedUntil).toLocaleTimeString()}.`;
+    } else if (s.error) {
+      banner.hidden = false; banner.style.color = 'var(--bad)'; banner.style.borderColor = 'var(--bad)';
+      banner.textContent = `⚠ ${s.error}`;
+    } else banner.hidden = true;
     const locks = await (await fetch('/api/locks')).json();
     const others = locks.filter((l) => !l.mine);
     $('lockBanner').hidden = !others.length;
@@ -186,6 +211,11 @@ async function poll() {
 }
 
 fetch('/api/defaults').then((r) => r.json()).then((d) => {
+  const boxes = (el, values) => { $(el).innerHTML = values.map((v) => `<label class="check"><input type="checkbox" value="${esc(v)}" checked /> ${esc(v)}</label>`).join(''); };
+  boxes('prioBoxes', d.priorities || []);
+  boxes('typeBoxes', d.types || []);
+  $('parallel').checked = Boolean(d.parallel); $('maxConcurrent').value = d.maxConcurrent || 3;
+  $('perTicket').checked = d.sessionPerTicket !== false;
   $('project').value = d.project || ''; $('repoPath').value = d.repoPath || ''; $('mainApp').value = d.mainApp || ''; $('model').value = d.model || ''; $('cookieFile').value = d.cookieFile || ''; $('testCommand').value = d.testCommand || '';
   $('cookieHint').textContent = d.hasCookie ? '(leave both empty to use the cookie from .env)' : '';
 });

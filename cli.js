@@ -15,6 +15,13 @@ Usage:
                   [--limit N] [--only ID1,ID2] [--force] [--no-hub-write] [--test-command "npm test"]
                   [--progress-interval MINUTES]   (progress summary on the terminal; default 5, 0 = off)
                   [--assignee "a@x.com,Full Name,me"] [--created-by "b@x.com"]
+                  [--types "Bug,Enhancement"] [--priorities "P0,P1"]
+                  [--parallel] [--max-concurrent N] [--shared-session]
+      Each ticket gets its own fresh Claude conversation (fewer tokens); --shared-session keeps one for the whole run.
+      --types / --priorities: only these ticket types / priorities this run (pick order unchanged).
+      --parallel: develop up to --max-concurrent (default 3) tickets at once, each in its own git worktree and Claude
+      session; bench verification and merges into development still happen one ticket at a time (merge queue).
+      --max-concurrent above 1 implies --parallel.
       --assignee / --created-by take emails, full names or "me" (comma-separated). Given together a ticket must
       match both; omit them to consider every ticket. They work with inspect and preview too.
       Resolve tickets end to end. --repo may be one repo or a folder (e.g. a Frappe bench) with many repos at any depth;
@@ -44,6 +51,11 @@ const { positionals, values } = parseArgs({
     model: { type: 'string' },
     'progress-interval': { type: 'string' },
     'no-fix-preexisting': { type: 'boolean' },
+    parallel: { type: 'boolean' },
+    'shared-session': { type: 'boolean' },
+    'max-concurrent': { type: 'string' },
+    types: { type: 'string' },
+    priorities: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
   },
 });
@@ -71,6 +83,11 @@ const cfg = buildConfig({
   dryRun: command === 'preview',
   fixPreexisting: values['no-fix-preexisting'] ? false : undefined,
   onlyPreexisting: command === 'fix-failures' ? true : undefined,
+  parallel: values.parallel || Number(values['max-concurrent']) > 1 ? true : undefined,
+  sessionPerTicket: values['shared-session'] ? false : undefined,
+  maxConcurrent: values['max-concurrent'] ? Number(values['max-concurrent']) : undefined,
+  types: values.types ? values.types.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+  priorities: values.priorities ? values.priorities.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
 });
 
 const resolver = new TicketResolver(cfg);
@@ -80,6 +97,9 @@ process.on('SIGINT', () => {
   console.log('Press Ctrl+C again to exit immediately.');
 });
 
+// process.exit() can cut off output still buffered for a pipe (e.g. `inspect | jq`): flush first.
+const flushThenExit = (code) => process.stdout.write('', () => process.stderr.write('', () => process.exit(code)));
+
 try {
   if (command === 'inspect') {
     const r = await resolver.inspect();
@@ -88,8 +108,8 @@ try {
   } else {
     await resolver.run();
   }
-  process.exit(0);
+  flushThenExit(0);
 } catch (e) {
   console.error(e.message);
-  process.exit(1);
+  flushThenExit(1);
 }

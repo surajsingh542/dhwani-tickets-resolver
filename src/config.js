@@ -73,6 +73,13 @@ export function buildConfig(overrides = {}) {
     testTimeoutMinutes: int(env.TEST_TIMEOUT_MINUTES, 20),
     maxFixAttempts: int(env.MAX_FIX_ATTEMPTS, 1),
     ticketTimeoutMinutes: int(env.TICKET_TIMEOUT_MINUTES, 60),
+    // Develop several tickets at once in separate git worktrees; bench verification and merges stay one at a time.
+    parallel: bool(env.PARALLEL, false),
+    // A new Claude conversation for every ticket (tickets are independent; saves tokens). false = one for the whole run.
+    sessionPerTicket: bool(env.SESSION_PER_TICKET, true),
+    maxConcurrent: int(env.MAX_CONCURRENT, 3),
+    // When Claude's usage limit is hit: pause until the reported reset time, then continue (false = stop the run).
+    waitOnUsageLimit: bool(env.WAIT_ON_USAGE_LIMIT, true),
     progressIntervalMinutes: int(env.PROGRESS_INTERVAL_MINUTES, 5),
 
     maxDownloadMb: int(env.MAX_DOWNLOAD_MB, 25),
@@ -85,6 +92,12 @@ export function buildConfig(overrides = {}) {
     force: false,
   };
 
+  // --types / --priorities narrow the configured lists but keep their pick order (Bug before Enhancement, P0 before P1).
+  const { types, priorities, ...rest } = overrides;
+  overrides = rest;
+  if (types?.length) cfg.typeOrder = selectSubset(cfg.typeOrder, types);
+  if (priorities?.length) cfg.priorities = selectSubset(cfg.priorities, priorities.map((p) => p.toUpperCase()));
+
   for (const [k, v] of Object.entries(overrides)) {
     if (v !== undefined && v !== null && v !== '') cfg[k] = v;
   }
@@ -92,6 +105,15 @@ export function buildConfig(overrides = {}) {
   if (cfg.repoPath) cfg.repoPath = path.resolve(cfg.repoPath);
   cfg.workspaceDir = path.resolve(cfg.workspaceDir);
   return cfg;
+}
+
+const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/s$/, '');
+
+/** The entries of `ordered` named in `wanted` (case/plural-insensitive), in `ordered`'s order; unknown ones appended. */
+export function selectSubset(ordered, wanted) {
+  const want = new Map(wanted.map((w) => [norm(w), w.trim()]));
+  const picked = ordered.filter((o) => want.delete(norm(o)));
+  return [...picked, ...want.values()];
 }
 
 export function validateConfig(cfg, { needRepo = true } = {}) {

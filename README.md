@@ -148,6 +148,7 @@ run is active.
 | `VERIFY_PASS` | `true` | Claude self-review turn before commit |
 | `HUB_WRITE` | `true` | Set `false` to never change the Hub |
 | `BENCH_SYNC` | `true` | After each ticket, `bench migrate`/`build` on `development` when it touched schema or front-end files |
+| `WAIT_ON_USAGE_LIMIT` | `true` | On a Claude usage limit, pause until the reset time and retry the same ticket (`false` = stop) |
 | `FIX_PREEXISTING_FAILURES` | `true` | Fix pre-existing test failures after the tickets (`--no-fix-preexisting`) |
 | `POST_CLARIFICATION_COMMENT` / `POST_RESOLUTION_COMMENT` | `true` / `false` | Discussion comments |
 | `CLAUDE_MODEL` | CLI default | Model for the session |

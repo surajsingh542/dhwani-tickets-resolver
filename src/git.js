@@ -144,9 +144,28 @@ export class Git {
   }
 
   /** Creates the ticket branch from the base branch. A branch left over from an earlier attempt (e.g. a reopened ticket) is reused and brought up to date. */
+  async remoteBranchExists(branch) {
+    const r = await this.tryRun('-c', 'credential.interactive=never', 'ls-remote', '--heads', this.remote, branch);
+    return r.ok && r.out.trim() !== '';
+  }
+
+  /**
+   * A ticket branch left by an earlier, interrupted attempt: deleted when it holds nothing beyond the base branch
+   * (so the ticket starts fresh). Returns 'none' | 'removed-empty' | 'kept'.
+   */
+  async tidyLeftoverBranch(branch) {
+    if (!(await this.branchExists(branch))) return 'none';
+    if ((await this.commitsAheadOfBase(branch)) === 0) {
+      const r = await this.tryRun('branch', '-D', branch);
+      if (r.ok) { this.logger.info(`${this.cwd}: removed empty leftover branch ${branch}`); return 'removed-empty'; }
+    }
+    return 'kept';
+  }
+
   async startTicketBranch(branch, { onConflict } = {}) {
     if (this.protected.has(branch)) throw new Error(`Refusing to use protected branch name "${branch}".`);
     await this.run('checkout', this.base);
+    await this.tidyLeftoverBranch(branch);
     if (await this.branchExists(branch)) {
       await this.run('checkout', branch);
       const m = await this.mergeResolving([this.base], {
@@ -155,6 +174,13 @@ export class Git {
         situation: `bringing the existing ticket branch ${branch} ("ours", from an earlier attempt) up to date with ${this.base} ("theirs")`,
       });
       if (!m.ok) throw new Error(`Existing branch ${branch} conflicts with ${this.base}: ${m.error}`);
+      if (!(await this.remoteBranchExists(branch))) {
+        // Never pushed (e.g. parked work of an interrupted run): turn it back into uncommitted changes on top of the
+        // base, so it is checked and committed once, through the hooks, like any fresh ticket.
+        await this.run('reset', '--mixed', this.base);
+        this.logger.info(`${this.cwd}: ${branch} had unpushed work from an earlier attempt — continuing from it as uncommitted changes`);
+        return { created: true };
+      }
       return { created: false };
     }
     await this.run('checkout', '-b', branch, this.base);
@@ -307,6 +333,29 @@ export class Git {
     await this.tryRun('clean', '-fd');
     await this.run('checkout', this.base);
     if (deleteBranch) await this.tryRun('branch', '-D', branch);
+  }
+
+  /**
+   * A separate working copy of this repository at `dir` on `branch` (git worktree), created from `base`. If the
+   * branch already exists it is checked out there as-is. A stale worktree at `dir` (e.g. from a crashed run) is
+   * removed first.
+   */
+  async addWorktree(dir, branch, base) {
+    if (fs.existsSync(dir)) await this.removeWorktree(dir);
+    await this.tryRun('worktree', 'prune');
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    if (await this.branchExists(branch)) {
+      await this.run('worktree', 'add', dir, branch);
+      return { created: false };
+    }
+    await this.run('worktree', 'add', '-b', branch, dir, base);
+    return { created: true };
+  }
+
+  async removeWorktree(dir) {
+    await this.tryRun('worktree', 'remove', '--force', dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+    await this.tryRun('worktree', 'prune');
   }
 
   /** Runs the project's test command (TEST_COMMAND) in the repo. */
