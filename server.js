@@ -75,20 +75,48 @@ app.get('/api/runs/current', (_req, res) => {
   res.json({ ...resolver.status, project: cfg.project, repoPath: cfg.repoPath, dryRun: cfg.dryRun });
 });
 
-// The project's real Hub stages, with the configured pick stages mapped onto them (spelling variants dropped).
-let stageCache = { key: '', at: 0, stages: [] };
+// The project's real Hub options: stages, priorities and types (the Hub's option lists plus any value actually used on
+// the project's tickets, e.g. "DevOps"), with the configured pick values mapped onto them (spelling variants dropped).
+let optionsCache = { key: '', at: 0, data: null };
 app.post('/api/stages', async (req, res) => {
   try {
     const cfg = configFrom(req.body);
     if (!cfg.cookie) throw new Error('no Hub cookie yet');
     const key = `${cfg.hubBaseUrl}|${cfg.project}|${cfg.cookie.slice(-12)}`;
-    if (stageCache.key !== key || Date.now() - stageCache.at > 10 * 60000) {
+    if (optionsCache.key !== key || Date.now() - optionsCache.at > 10 * 60000) {
       const hub = new HubClient({ baseUrl: cfg.hubBaseUrl, cookie: cfg.cookie, logger: console });
       await hub.init();
-      stageCache = { key, at: Date.now(), stages: ((await hub.getPipelineStages()) || []).map((x) => (typeof x === 'string' ? x : x?.value || x?.name)).filter(Boolean) };
+      const val = (x) => (typeof x === 'string' ? x : x?.value || x?.name || x?.label);
+      const stages = ((await hub.getPipelineStages()) || []).map(val).filter(Boolean);
+      const rows = (await hub.getProjectTasks(cfg.project).catch(() => [])) || [];
+      const detail = rows.length ? await hub.getTaskDetail(rows[0].name).catch(() => ({})) : {};
+      const used = (field) => rows.map((r) => r[field]).filter((v) => v && String(v).trim());
+      const uniq = (list) => { const seen = new Set(); return list.filter((v) => !seen.has(norm(v)) && seen.add(norm(v))); };
+      optionsCache = {
+        key, at: Date.now(),
+        data: {
+          stages,
+          priorities: uniq([...(detail.priority_options || []).map(val), ...used('custom_priority')].filter(Boolean)),
+          types: uniq([...(detail.work_type_options || []).map(val), ...used('custom_work_type')].filter(Boolean)),
+        },
+      };
     }
-    const wanted = new Set(cfg.pickStatuses.map(norm));
-    res.json({ stages: stageCache.stages, picked: stageCache.stages.filter((x) => wanted.has(norm(x))) });
+    const { stages, priorities, types } = optionsCache.data;
+    const wantStage = new Set(cfg.pickStatuses.map(norm));
+    // Configured pick order first, then whatever else the Hub has; "NONE" (no priority / no type) last.
+    const ordered = (configured, hubList) => {
+      const known = configured.filter((c) => c !== 'NONE');
+      const extra = hubList.filter((h) => !known.some((k) => norm(k) === norm(h)));
+      return [...known.filter((k) => hubList.some((h) => norm(h) === norm(k)) || !hubList.length), ...extra, 'NONE'];
+    };
+    res.json({
+      stages,
+      picked: stages.filter((x) => wantStage.has(norm(x))),
+      priorities: ordered(cfg.priorities, priorities),
+      prioritiesOn: cfg.priorities,
+      types: ordered(cfg.typeOrder, types),
+      typesOn: cfg.typeOrder,
+    });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }

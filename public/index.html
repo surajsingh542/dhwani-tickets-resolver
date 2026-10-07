@@ -75,7 +75,7 @@
     </div>
     <div class="row">
       <span class="muted">Stages:</span><span id="stageBoxes" class="row" style="margin:0"></span>
-      <span class="muted" style="font-size:12px">(the project's stages on the Hub)</span>
+      <span class="muted" id="stageHint" style="font-size:12px">(enter the project and cookie (or cookie file) to load the Hub's stages, priorities and types)</span>
     </div>
     <div class="row">
       <label class="check"><input type="checkbox" id="parallel" /> Work on tickets in parallel (separate worktrees; bench checks and merges stay one at a time)</label>
@@ -217,9 +217,15 @@ async function poll() {
 }
 
 fetch('/api/defaults').then((r) => r.json()).then((d) => {
-  const boxes = (el, values, on = values, label = (v) => v) => { $(el).innerHTML = values.map((v) => `<label class="check"><input type="checkbox" value="${esc(v)}" ${on.includes(v) ? 'checked' : ''} /> ${esc(label(v))}</label>`).join(''); };
+  const nk = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const boxes = (el, values, on = values, label = (v) => v) => { const want = new Set(on.map(nk)); $(el).innerHTML = values.map((v) => `<label class="check"><input type="checkbox" value="${esc(v)}" ${want.has(nk(v)) ? 'checked' : ''} /> ${esc(label(v))}</label>`).join(''); };
   boxes('prioBoxes', d.priorities || [], d.prioritiesOn || d.priorities || [], (v) => (v === 'NONE' ? 'No priority' : v));
   boxes('typeBoxes', d.types || [], d.typesOn || d.types || [], (v) => (v === 'NONE' ? 'No type' : v));
+  // Current ticks of a checkbox group (falls back to the configured values), compared case-insensitively by boxes().
+  const checkedIn = (el, fallback) => {
+    const on = [...document.querySelectorAll(`#${el} input:checked`)].map((i) => i.value);
+    return on.length ? on : fallback || [];
+  };
   // Only the Hub's real stages are shown; a stage is ticked when it matches one of the chosen spellings.
   const nm = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
   window.renderStages = (all, on) => {
@@ -227,18 +233,43 @@ fetch('/api/defaults').then((r) => r.json()).then((d) => {
     $('stageBoxes').innerHTML = all.map((v) => `<label class="check"><input type="checkbox" value="${esc(v)}" ${want.has(nm(v)) ? 'checked' : ''} /> ${esc(v)}</label>`).join('');
   };
   renderStages(['Open', 'Reopened'], ['Open', 'Reopened']);
+  let stagesLoaded = '';
   window.loadStages = async () => {
+    const b = body();
+    const key = `${b.project}|${b.cookieFile || ''}|${(b.cookie || '').slice(-12)}`;
+    if (!b.project || (!b.cookie && !b.cookieFile && !d.hasCookie) || key === stagesLoaded) return;
     try {
-      const r = await post('/api/stages', body());
-      if (r.stages?.length) renderStages(r.stages, [...document.querySelectorAll('#stageBoxes input:checked')].map((i) => i.value).concat(r.picked));
-    } catch { /* Hub not reachable yet (no cookie): keep Open + Reopened */ }
+      $('stageHint').textContent = '(loading the Hub\'s stages…)';
+      const r = await post('/api/stages', b);
+      if (r.priorities?.length) boxes('prioBoxes', r.priorities, checkedIn('prioBoxes', r.prioritiesOn), (v) => (v === 'NONE' ? 'No priority' : v));
+      if (r.types?.length) boxes('typeBoxes', r.types, checkedIn('typeBoxes', r.typesOn), (v) => (v === 'NONE' ? 'No type' : v));
+      if (r.stages?.length) {
+        renderStages(r.stages, [...document.querySelectorAll('#stageBoxes input:checked')].map((i) => i.value).concat(r.picked));
+        $('stageHint').textContent = `(stages, priorities and types as on the Hub for ${b.project})`;
+        stagesLoaded = key;
+      }
+    } catch (e) {
+      $('stageHint').textContent = `(could not load the Hub's stages: ${e.message})`;
+    }
   };
+  // Remembered, non-secret form fields (never the pasted cookie), restored before loading the stages.
+  const KEEP = ['project', 'repoPath', 'mainApp', 'cookieFile', 'model', 'testCommand', 'assignee', 'createdBy'];
+  try {
+    const saved = JSON.parse(localStorage.getItem('atr:form') || '{}');
+    for (const id of KEEP) if (saved[id] && !$(id).value) $(id).value = saved[id];
+  } catch { /* storage unavailable */ }
+  const remember = () => {
+    try { localStorage.setItem('atr:form', JSON.stringify(Object.fromEntries(KEEP.map((id) => [id, $(id).value.trim()])))); } catch { /* storage unavailable */ }
+  };
+  let debounce;
+  const soon = () => { remember(); clearTimeout(debounce); debounce = setTimeout(loadStages, 600); };
+  for (const id of [...KEEP, 'cookie']) { $(id).addEventListener('input', soon); $(id).addEventListener('change', soon); }
   loadStages();
-  for (const id of ['project', 'cookieFile']) $(id).addEventListener('change', () => loadStages());
-  $('cookie').addEventListener('change', () => loadStages());
+  setTimeout(loadStages, 1500); // after the browser has autofilled the form
   $('parallel').checked = Boolean(d.parallel); $('maxConcurrent').value = d.maxConcurrent || 3;
   $('perTicket').checked = d.sessionPerTicket !== false;
-  $('project').value = d.project || ''; $('repoPath').value = d.repoPath || ''; $('mainApp').value = d.mainApp || ''; $('model').value = d.model || ''; $('cookieFile').value = d.cookieFile || ''; $('testCommand').value = d.testCommand || '';
+  // .env defaults only fill fields that are still empty (remembered values win).
+  for (const [id, v] of [['project', d.project], ['repoPath', d.repoPath], ['mainApp', d.mainApp], ['model', d.model], ['cookieFile', d.cookieFile]]) if (v && !$(id).value) $(id).value = v; if (d.testCommand && !$('testCommand').value) $('testCommand').value = d.testCommand;
   $('cookieHint').textContent = d.hasCookie ? '(leave both empty to use the cookie from .env)' : '';
 });
 listen(); poll(); setInterval(poll, 3000);
