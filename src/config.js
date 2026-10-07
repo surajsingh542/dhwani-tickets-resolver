@@ -95,7 +95,9 @@ export function buildConfig(overrides = {}) {
   };
 
   // --types / --priorities narrow the configured lists but keep their pick order (Bug before Enhancement, P0 before P1).
-  const { types, priorities, ...rest } = overrides;
+  const { types, priorities, stages, ...rest } = overrides;
+  // --stages replaces the pickable stages for this run (e.g. Open,Reopened,Planned).
+  if (stages?.length) cfg.pickStatuses = stages.map((x) => x.trim()).filter(Boolean);
   overrides = rest;
   if (types?.length) {
     // "none" / "no type" = tickets without a type; they come after the listed types.

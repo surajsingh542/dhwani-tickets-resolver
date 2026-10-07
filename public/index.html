@@ -74,6 +74,10 @@
       <span class="muted">Types:</span><span id="typeBoxes" class="row" style="margin:0"></span>
     </div>
     <div class="row">
+      <span class="muted">Stages:</span><span id="stageBoxes" class="row" style="margin:0"></span>
+      <span class="muted" style="font-size:12px">(Inspect queue loads the Hub's full stage list)</span>
+    </div>
+    <div class="row">
       <label class="check"><input type="checkbox" id="parallel" /> Work on tickets in parallel (separate worktrees; bench checks and merges stay one at a time)</label>
       <label class="check">Max concurrent <input type="number" id="maxConcurrent" min="1" max="10" value="3" style="width:70px" /></label>
       <label class="check"><input type="checkbox" id="perTicket" checked /> New Claude session for every ticket (fewer tokens)</label>
@@ -135,6 +139,7 @@ const body = (extra = {}) => ({
   sessionPerTicket: $('perTicket').checked,
   priorities: [...document.querySelectorAll('#prioBoxes input:checked')].map((i) => i.value),
   types: [...document.querySelectorAll('#typeBoxes input:checked')].map((i) => i.value),
+  stages: [...document.querySelectorAll('#stageBoxes input:checked')].map((i) => i.value),
   ...extra,
 });
 const post = async (url, data) => {
@@ -157,6 +162,7 @@ $('inspect').onclick = async () => {
   $('msg').textContent = 'Inspecting…';
   try {
     const r = await post('/api/inspect', body());
+    if (r.pipelineStages?.length) renderStages(r.pipelineStages, [...document.querySelectorAll('#stageBoxes input:checked')].map((i) => i.value));
     renderQueue(r.queue);
     $('msg').textContent = `${r.totalTickets} tickets, ${r.queue.length} pickable, ${r.skipped.length} skipped. Stages: ${(r.pipelineStages || []).join(', ')}`;
     $('log').textContent = JSON.stringify({ distinct: r.distinct, skipped: r.skipped }, null, 2);
@@ -214,6 +220,11 @@ fetch('/api/defaults').then((r) => r.json()).then((d) => {
   const boxes = (el, values, on = values, label = (v) => v) => { $(el).innerHTML = values.map((v) => `<label class="check"><input type="checkbox" value="${esc(v)}" ${on.includes(v) ? 'checked' : ''} /> ${esc(label(v))}</label>`).join(''); };
   boxes('prioBoxes', d.priorities || [], d.prioritiesOn || d.priorities || [], (v) => (v === 'NONE' ? 'No priority' : v));
   boxes('typeBoxes', d.types || [], d.typesOn || d.types || [], (v) => (v === 'NONE' ? 'No type' : v));
+  window.renderStages = (all, on) => {
+    const seen = new Set(); const list = [...all, ...on].filter((v) => !seen.has(v.toLowerCase()) && seen.add(v.toLowerCase()));
+    $('stageBoxes').innerHTML = list.map((v) => `<label class="check"><input type="checkbox" value="${esc(v)}" ${on.some((o) => o.toLowerCase() === v.toLowerCase()) ? 'checked' : ''} /> ${esc(v)}</label>`).join('');
+  };
+  renderStages(['Open', 'Reopened'], d.stages || ['Open', 'Reopened']);
   $('parallel').checked = Boolean(d.parallel); $('maxConcurrent').value = d.maxConcurrent || 3;
   $('perTicket').checked = d.sessionPerTicket !== false;
   $('project').value = d.project || ''; $('repoPath').value = d.repoPath || ''; $('mainApp').value = d.mainApp || ''; $('model').value = d.model || ''; $('cookieFile').value = d.cookieFile || ''; $('testCommand').value = d.testCommand || '';

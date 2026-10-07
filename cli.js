@@ -15,11 +15,12 @@ Usage:
                   [--limit N] [--only ID1,ID2] [--force] [--no-hub-write] [--test-command "npm test"]
                   [--progress-interval MINUTES]   (progress summary on the terminal; default 5, 0 = off)
                   [--assignee "a@x.com,Full Name,me"] [--created-by "b@x.com"]
-                  [--types "Bug,Enhancement"] [--priorities "P0,P1"]
+                  [--types "Bug,Enhancement"] [--priorities "P0,P1"] [--stages "Open,Reopened,Planned"]
                   [--parallel] [--max-concurrent N] [--shared-session]
       Each ticket gets its own fresh Claude conversation (fewer tokens); --shared-session keeps one for the whole run.
       --types / --priorities: only these ticket types / priorities this run (pick order unchanged).
       Add "none" to --priorities / --types to include tickets with no priority / no type set (picked after the others).
+      --stages: Hub stages whose tickets are picked this run (default Open + Reopened; run inspect for the full list).
       --parallel: develop up to --max-concurrent (default 3) tickets at once, each in its own git worktree and Claude
       session; bench verification and merges into development still happen one ticket at a time (merge queue).
       --max-concurrent above 1 implies --parallel.
@@ -56,6 +57,7 @@ const { positionals, values } = parseArgs({
     'shared-session': { type: 'boolean' },
     'max-concurrent': { type: 'string' },
     types: { type: 'string' },
+    stages: { type: 'string' },
     priorities: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
   },
@@ -88,6 +90,7 @@ const cfg = buildConfig({
   sessionPerTicket: values['shared-session'] ? false : undefined,
   maxConcurrent: values['max-concurrent'] ? Number(values['max-concurrent']) : undefined,
   types: values.types ? values.types.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+  stages: values.stages ? values.stages.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
   priorities: values.priorities ? values.priorities.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
 });
 
