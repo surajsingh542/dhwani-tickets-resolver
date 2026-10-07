@@ -211,9 +211,9 @@ async function poll() {
 }
 
 fetch('/api/defaults').then((r) => r.json()).then((d) => {
-  const boxes = (el, values) => { $(el).innerHTML = values.map((v) => `<label class="check"><input type="checkbox" value="${esc(v)}" checked /> ${esc(v)}</label>`).join(''); };
-  boxes('prioBoxes', d.priorities || []);
-  boxes('typeBoxes', d.types || []);
+  const boxes = (el, values, on = values, label = (v) => v) => { $(el).innerHTML = values.map((v) => `<label class="check"><input type="checkbox" value="${esc(v)}" ${on.includes(v) ? 'checked' : ''} /> ${esc(label(v))}</label>`).join(''); };
+  boxes('prioBoxes', d.priorities || [], d.prioritiesOn || d.priorities || [], (v) => (v === 'NONE' ? 'No priority' : v));
+  boxes('typeBoxes', d.types || [], d.typesOn || d.types || [], (v) => (v === 'NONE' ? 'No type' : v));
   $('parallel').checked = Boolean(d.parallel); $('maxConcurrent').value = d.maxConcurrent || 3;
   $('perTicket').checked = d.sessionPerTicket !== false;
   $('project').value = d.project || ''; $('repoPath').value = d.repoPath || ''; $('mainApp').value = d.mainApp || ''; $('model').value = d.model || ''; $('cookieFile').value = d.cookieFile || ''; $('testCommand').value = d.testCommand || '';

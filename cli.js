@@ -19,6 +19,7 @@ Usage:
                   [--parallel] [--max-concurrent N] [--shared-session]
       Each ticket gets its own fresh Claude conversation (fewer tokens); --shared-session keeps one for the whole run.
       --types / --priorities: only these ticket types / priorities this run (pick order unchanged).
+      Add "none" to --priorities / --types to include tickets with no priority / no type set (picked after the others).
       --parallel: develop up to --max-concurrent (default 3) tickets at once, each in its own git worktree and Claude
       session; bench verification and merges into development still happen one ticket at a time (merge queue).
       --max-concurrent above 1 implies --parallel.

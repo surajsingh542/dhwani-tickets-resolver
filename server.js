@@ -42,7 +42,7 @@ const configFrom = (body = {}, extra = {}) =>
 // Defaults from .env so the form can be prefilled (never the cookie).
 app.get('/api/defaults', (_req, res) => {
   const c = buildConfig();
-  res.json({ sessionPerTicket: c.sessionPerTicket, types: c.typeOrder, priorities: c.priorities, parallel: c.parallel, maxConcurrent: c.maxConcurrent, project: c.project, repoPath: c.repoPath, mainApp: c.mainApp, model: c.claudeModel || '', cookieFile: process.env.HUB_COOKIE_FILE || '', baseBranch: c.baseBranch, testCommand: c.testCommand, hasCookie: Boolean(c.cookie) });
+  res.json({ sessionPerTicket: c.sessionPerTicket, types: [...new Set([...c.typeOrder, 'NONE'])], typesOn: c.typeOrder, priorities: [...new Set([...c.priorities, 'P0', 'P1', 'P2', 'NONE'])], prioritiesOn: c.priorities, parallel: c.parallel, maxConcurrent: c.maxConcurrent, project: c.project, repoPath: c.repoPath, mainApp: c.mainApp, model: c.claudeModel || '', cookieFile: process.env.HUB_COOKIE_FILE || '', baseBranch: c.baseBranch, testCommand: c.testCommand, hasCookie: Boolean(c.cookie) });
 });
 
 app.post('/api/inspect', async (req, res) => {

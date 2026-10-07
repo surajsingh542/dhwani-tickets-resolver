@@ -7,6 +7,16 @@ export class StateStore {
   constructor(file) {
     this.file = file;
     this.data = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { tickets: {} };
+    // Older runs recorded a pre-existing failure that no longer reproduces as "failed"; it is already passing.
+    let fixed = 0;
+    for (const r of Object.values(this.data.tickets)) {
+      if (r.kind === 'preexisting' && r.outcome === 'failed' && /NOT REPRODUCIBLE/i.test(`${r.error || ''} ${r.result?.summary || ''}`)) {
+        r.outcome = 'no_change_needed';
+        delete r.error;
+        fixed++;
+      }
+    }
+    if (fixed) fs.writeFileSync(file, JSON.stringify(this.data, null, 2));
   }
   get(id) { return this.data.tickets[id]; }
   set(id, record) {
@@ -138,11 +148,11 @@ export async function writeReports(state, reportsDir, cfg) {
     ],
     pre.map((r) => ({
       failure: r.failure, tickets: (r.reportedBy || []).join(', '),
-      outcome: { resolved: 'fixed', needs_clarification: 'needs clarification', no_change_needed: 'no change needed', failed: 'not fixed', interrupted: 'interrupted (retried next run)' }[r.outcome] || r.outcome,
+      outcome: { resolved: 'fixed', needs_clarification: 'needs clarification', no_change_needed: 'already passing on development (not reproducible)', failed: 'not fixed', interrupted: 'interrupted (retried next run)' }[r.outcome] || r.outcome,
       branch: r.outcome === 'resolved' || r.branchKept ? r.branch : '',
       commit: perRepo(r, (x) => `${x.name}: ${x.commit?.slice(0, 10)}`), merge: perRepo(r, (x) => `${x.name}: ${x.mergeCommit?.slice(0, 10) || '—'}`),
       rootCause: r.result?.root_cause, summary: r.result?.summary, files: perRepo(r, (x) => x.files.map((f) => `${x.name}/${f}`).join('\n')),
-      tests: [tests(r.result?.tests), r.result?.tests?.details].filter(Boolean).join('\n'), questions: numbered(r.result?.questions),
+      tests: [tests(r.result?.tests), r.result?.tests?.details, r.outcome === 'no_change_needed' ? r.result?.summary : ''].filter(Boolean).join('\n'), questions: numbered(r.result?.questions),
       error: r.error, folder: r.ticketDir, processedAt: r.processedAt,
     })),
   );

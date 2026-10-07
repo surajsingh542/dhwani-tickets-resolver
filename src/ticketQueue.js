@@ -50,16 +50,22 @@ export function passesPeopleFilters(f, cfg, me) {
   );
 }
 
+// Stands for "no priority assigned" in PRIORITIES / --priorities ("none"); picked only when listed.
+export const NO_PRIORITY = 'NONE';
+
 export function priorityKey(value, priorities) {
   const m = String(value ?? '').match(/p\s*-?\s*(\d)/i);
-  if (!m) return null;
+  if (!m) return String(value ?? '').trim() === '' && priorities.includes(NO_PRIORITY) ? NO_PRIORITY : null;
   const p = `P${m[1]}`;
   return priorities.includes(p) ? p : null;
 }
 
+// Stands for "no type set" in TYPE_ORDER / --types ("none"); picked only when listed.
+export const NO_TYPE = 'NONE';
+
 export function typeRank(value, typeOrder) {
   const n = norm(value);
-  if (!n) return -1;
+  if (!n) return typeOrder.indexOf(NO_TYPE);
   for (let i = 0; i < typeOrder.length; i++) {
     const canon = norm(typeOrder[i]);
     const aliases = TYPE_ALIASES[canon] || [canon];
@@ -87,9 +93,9 @@ export function buildQueue(rows, cfg, me) {
     if (!isPickable(f, cfg.pickStatuses)) continue; // not Open/Reopen: not our concern, don't report
     if (!passesPeopleFilters(f, cfg, me)) { filteredOut++; continue; } // --assignee / --created-by
     const p = priorityKey(f.priority, cfg.priorities);
-    if (!p) { skipped.push({ ...f, reason: f.priority ? `priority "${f.priority}" not in ${cfg.priorities.join('/')}` : 'no priority assigned' }); continue; }
+    if (!p) { skipped.push({ ...f, reason: f.priority ? `priority "${f.priority}" not in ${cfg.priorities.join('/')}` : `no priority assigned (add "none" to the priorities to include these)` }); continue; }
     const t = typeRank(f.type, cfg.typeOrder);
-    if (t < 0) { skipped.push({ ...f, reason: `type "${f.type || '(none)'}" not in ${cfg.typeOrder.join('/')}` }); continue; }
+    if (t < 0) { skipped.push({ ...f, reason: f.type ? `type "${f.type}" not in ${cfg.typeOrder.join('/')}` : 'no type set (add "none" to the types to include these)' }); continue; }
     queue.push({ ...f, priorityKey: p, typeRank: t, row });
   }
   queue.sort(

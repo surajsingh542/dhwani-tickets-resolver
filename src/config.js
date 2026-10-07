@@ -49,8 +49,8 @@ export function buildConfig(overrides = {}) {
     // Optional people filters (email, full name or "me"; comma-separated). Both given = ticket must match both.
     assigneeFilter: list(env.ASSIGNEE, ''),
     createdByFilter: list(env.CREATED_BY, ''),
-    priorities: list(env.PRIORITIES, 'P0,P1,P2'),
-    typeOrder: list(env.TYPE_ORDER, 'Bug,Enhancement,Change Request,Feature,Task'),
+    priorities: list(env.PRIORITIES, 'P0,P1,P2').map((p) => (/^(none|no[ _-]?priority)$/i.test(p) ? 'NONE' : p.toUpperCase())),
+    typeOrder: list(env.TYPE_ORDER, 'Bug,Enhancement,Change Request,Feature,Task').map((t) => (/^(none|no[ _-]?type)$/i.test(t) ? 'NONE' : t)),
     pickStatuses: list(env.PICK_STATUSES, 'Open,Reopen,Reopened,Re-open,Re-opened'),
     resolvedStage: env.RESOLVED_STAGE || 'To Test',
     clarificationStage: env.CLARIFICATION_STAGE || 'Review',
@@ -97,8 +97,16 @@ export function buildConfig(overrides = {}) {
   // --types / --priorities narrow the configured lists but keep their pick order (Bug before Enhancement, P0 before P1).
   const { types, priorities, ...rest } = overrides;
   overrides = rest;
-  if (types?.length) cfg.typeOrder = selectSubset(cfg.typeOrder, types);
-  if (priorities?.length) cfg.priorities = selectSubset(cfg.priorities, priorities.map((p) => p.toUpperCase()));
+  if (types?.length) {
+    // "none" / "no type" = tickets without a type; they come after the listed types.
+    const wanted = types.map((t) => (/^(none|no[ _-]?type|untyped|blank|empty)$/i.test(t.trim()) ? 'NONE' : t));
+    cfg.typeOrder = selectSubset([...cfg.typeOrder.filter((t) => t !== 'NONE'), 'NONE'], wanted);
+  }
+  if (priorities?.length) {
+    // "none" / "no priority" = tickets without a priority; unless placed explicitly they come after the others.
+    const wanted = priorities.map((p) => (/^(none|no[ _-]?priority|unprioriti[sz]ed|blank|empty)$/i.test(p.trim()) ? 'NONE' : p.toUpperCase()));
+    cfg.priorities = selectSubset([...cfg.priorities.filter((p) => p !== 'NONE'), 'NONE'], wanted);
+  }
 
   for (const [k, v] of Object.entries(overrides)) {
     if (v !== undefined && v !== null && v !== '') cfg[k] = v;

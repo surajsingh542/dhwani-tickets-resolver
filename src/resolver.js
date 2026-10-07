@@ -889,6 +889,10 @@ The worktree is gone — work here now. The bench runs this code, and bench comm
       onClarification: (rec, result, abandon) => abandon('needs_clarification', { result }),
       onNoChange: (rec, result, abandon) => abandon('no_change_needed', { result }),
     });
+    if (out.outcome === 'failed' && /NOT REPRODUCIBLE/i.test(out.result?.summary || out.error || '')) {
+      // Passing already (fixed meanwhile by another change): a good outcome, not a failure.
+      return this.save({ ...out, outcome: 'no_change_needed', error: undefined });
+    }
     if (out.outcome !== 'resolved') return out;
     return this.save({ ...record, result: out.result, outcome: 'resolved', hubUpdate: 'n/a (not a Hub ticket)' });
   }
@@ -900,8 +904,9 @@ Branch \`${branch}\` is checked out from \`${this.cfg.baseBranch}\`. Folder: ${d
 Reported while working on ${f.tickets.join(', ')}:
   ${f.text}
 
-1. Reproduce it first: run just that test (on this branch, before changing anything). If it does not fail any more,
-   change nothing and report status "failed" with a summary starting "NOT REPRODUCIBLE" (say what you ran).
+1. Reproduce it first: run just that test (on this branch, before changing anything). If it does not fail any more
+   (another fix already covered it), change nothing and report status "no_change_needed" with a summary starting
+   "NOT REPRODUCIBLE" that says what you ran.
 2. Find the root cause: is the application code wrong, or is the test out of date with intended behaviour?
    Use git log/blame on both to see which side changed last and why.
 3. Fix the real cause. Never delete, skip or weaken the test to make it pass. If you change the test, explain why the
