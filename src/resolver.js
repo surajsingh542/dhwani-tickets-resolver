@@ -784,11 +784,12 @@ The worktree is gone — work here now. The bench runs this code, and bench comm
           this.status.error = 'Claude usage limit reached — run stopped; re-run after the limit resets.';
           return null;
         }
-        this.logger.warn(`⏸ ${e.message}. Pausing until ${until.toLocaleString()} (+2 min), then retrying ${id}.`);
+        const resumeAt = new Date(Date.now() + wait); // the reported reset time plus a safety margin
+        this.logger.warn(`⏸ ${e.message}. Pausing until ${resumeAt.toLocaleString()} (reset ${until.toLocaleTimeString()} + margin), then retrying ${id}.`);
         const phase = this.status.phase;
         this.status.phase = 'paused';
-        this.status.pausedUntil = until.toISOString();
-        if (this.ic.current) this.ic.current.step = `paused for Claude usage limit until ${until.toLocaleTimeString()}`;
+        this.status.pausedUntil = resumeAt.toISOString();
+        if (this.ic.current) this.ic.current.step = `paused for Claude usage limit — resumes at ${resumeAt.toLocaleTimeString()}`;
         const end = Date.now() + wait;
         while (Date.now() < end && !this.stopRequested) await new Promise((r) => setTimeout(r, Math.min(30000, end - Date.now())));
         this.status.phase = phase;
