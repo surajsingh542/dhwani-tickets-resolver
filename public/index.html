@@ -75,7 +75,7 @@
     </div>
     <div class="row">
       <span class="muted">Stages:</span><span id="stageBoxes" class="row" style="margin:0"></span>
-      <span class="muted" style="font-size:12px">(Inspect queue loads the Hub's full stage list)</span>
+      <span class="muted" style="font-size:12px">(the project's stages on the Hub)</span>
     </div>
     <div class="row">
       <label class="check"><input type="checkbox" id="parallel" /> Work on tickets in parallel (separate worktrees; bench checks and merges stay one at a time)</label>
@@ -220,11 +220,22 @@ fetch('/api/defaults').then((r) => r.json()).then((d) => {
   const boxes = (el, values, on = values, label = (v) => v) => { $(el).innerHTML = values.map((v) => `<label class="check"><input type="checkbox" value="${esc(v)}" ${on.includes(v) ? 'checked' : ''} /> ${esc(label(v))}</label>`).join(''); };
   boxes('prioBoxes', d.priorities || [], d.prioritiesOn || d.priorities || [], (v) => (v === 'NONE' ? 'No priority' : v));
   boxes('typeBoxes', d.types || [], d.typesOn || d.types || [], (v) => (v === 'NONE' ? 'No type' : v));
+  // Only the Hub's real stages are shown; a stage is ticked when it matches one of the chosen spellings.
+  const nm = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
   window.renderStages = (all, on) => {
-    const seen = new Set(); const list = [...all, ...on].filter((v) => !seen.has(v.toLowerCase()) && seen.add(v.toLowerCase()));
-    $('stageBoxes').innerHTML = list.map((v) => `<label class="check"><input type="checkbox" value="${esc(v)}" ${on.some((o) => o.toLowerCase() === v.toLowerCase()) ? 'checked' : ''} /> ${esc(v)}</label>`).join('');
+    const want = new Set(on.map(nm));
+    $('stageBoxes').innerHTML = all.map((v) => `<label class="check"><input type="checkbox" value="${esc(v)}" ${want.has(nm(v)) ? 'checked' : ''} /> ${esc(v)}</label>`).join('');
   };
-  renderStages(['Open', 'Reopened'], d.stages || ['Open', 'Reopened']);
+  renderStages(['Open', 'Reopened'], ['Open', 'Reopened']);
+  window.loadStages = async () => {
+    try {
+      const r = await post('/api/stages', body());
+      if (r.stages?.length) renderStages(r.stages, [...document.querySelectorAll('#stageBoxes input:checked')].map((i) => i.value).concat(r.picked));
+    } catch { /* Hub not reachable yet (no cookie): keep Open + Reopened */ }
+  };
+  loadStages();
+  for (const id of ['project', 'cookieFile']) $(id).addEventListener('change', () => loadStages());
+  $('cookie').addEventListener('change', () => loadStages());
   $('parallel').checked = Boolean(d.parallel); $('maxConcurrent').value = d.maxConcurrent || 3;
   $('perTicket').checked = d.sessionPerTicket !== false;
   $('project').value = d.project || ''; $('repoPath').value = d.repoPath || ''; $('mainApp').value = d.mainApp || ''; $('model').value = d.model || ''; $('cookieFile').value = d.cookieFile || ''; $('testCommand').value = d.testCommand || '';

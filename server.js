@@ -6,6 +6,8 @@ import { buildConfig, projectWorkspace, readCookieFile } from './src/config.js';
 import { TicketResolver } from './src/resolver.js';
 import { REPORT_FILES } from './src/reporter.js';
 import { listLocks } from './src/lock.js';
+import { HubClient } from './src/hubClient.js';
+import { norm } from './src/ticketQueue.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -71,6 +73,25 @@ app.get('/api/runs/current', (_req, res) => {
   if (!active) return res.json({ phase: 'idle' });
   const { resolver, cfg } = active;
   res.json({ ...resolver.status, project: cfg.project, repoPath: cfg.repoPath, dryRun: cfg.dryRun });
+});
+
+// The project's real Hub stages, with the configured pick stages mapped onto them (spelling variants dropped).
+let stageCache = { key: '', at: 0, stages: [] };
+app.post('/api/stages', async (req, res) => {
+  try {
+    const cfg = configFrom(req.body);
+    if (!cfg.cookie) throw new Error('no Hub cookie yet');
+    const key = `${cfg.hubBaseUrl}|${cfg.project}|${cfg.cookie.slice(-12)}`;
+    if (stageCache.key !== key || Date.now() - stageCache.at > 10 * 60000) {
+      const hub = new HubClient({ baseUrl: cfg.hubBaseUrl, cookie: cfg.cookie, logger: console });
+      await hub.init();
+      stageCache = { key, at: Date.now(), stages: ((await hub.getPipelineStages()) || []).map((x) => (typeof x === 'string' ? x : x?.value || x?.name)).filter(Boolean) };
+    }
+    const wanted = new Set(cfg.pickStatuses.map(norm));
+    res.json({ stages: stageCache.stages, picked: stageCache.stages.filter((x) => wanted.has(norm(x))) });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // Runs holding locks right now — including ones started from the terminal.
