@@ -18,6 +18,8 @@ Usage:
                   [--types "Bug,Enhancement"] [--priorities "P0,P1"] [--stages "Open,Reopened,Planned"]
                   [--parallel] [--max-concurrent N] [--shared-session]
       Each ticket gets its own fresh Claude conversation (fewer tokens); --shared-session keeps one for the whole run.
+      --force re-runs tickets already handled; tickets moved back to Open/Reopened after a run are picked again without it.
+      Pre-existing failures already fixed or passing are only re-checked by "fix-failures --force".
       --types / --priorities: only these ticket types / priorities this run (pick order unchanged).
       Add "none" to --priorities / --types to include tickets with no priority / no type set (picked after the others).
       --stages: Hub stages whose tickets are picked this run (default Open + Reopened; run inspect for the full list).
@@ -100,6 +102,16 @@ process.on('SIGINT', () => {
   resolver.requestStop();
   console.log('Press Ctrl+C again to exit immediately.');
 });
+
+// Manual resume of a usage-limit pause (e.g. after switching the Claude account): "r" + Enter, or SIGUSR1.
+process.on('SIGUSR1', () => { if (!resolver.requestResume()) console.log('Nothing is paused right now.'); });
+if (process.stdin.isTTY && command !== 'inspect') {
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (line) => {
+    if (line.trim().toLowerCase() === 'r' && !resolver.requestResume()) console.log('Nothing is paused right now.');
+  });
+  process.stdin.unref?.();
+}
 
 // process.exit() can cut off output still buffered for a pipe (e.g. `inspect | jq`): flush first.
 const flushThenExit = (code) => process.stdout.write('', () => process.stderr.write('', () => process.exit(code)));

@@ -8,7 +8,7 @@ import { Git } from './git.js';
 import { Mutex } from './mutex.js';
 import { acquireLocks } from './lock.js';
 import { ClaudeSession, parseResult, isSessionCrash } from './claudeSession.js';
-import { fieldsOf, isPickable, passesPeopleFilters } from './ticketQueue.js';
+import { fieldsOf, isPickable, passesPeopleFilters, norm } from './ticketQueue.js';
 import { buildQueue, distinctValues, matchStage } from './ticketQueue.js';
 import { buildTicketContext } from './contextBuilder.js';
 import { StateStore, writeReports } from './reporter.js';
@@ -54,6 +54,14 @@ export class TicketResolver extends EventEmitter {
       this.status.running = (this.status.running || []).filter((c) => c !== ctx.current);
       this.status.current = this.status.running[0] || null;
     }
+  }
+
+  /** Ends a usage-limit pause now (e.g. after switching the Claude account). Returns whether anything was paused. */
+  requestResume() {
+    if (this.status.phase !== 'paused') return false;
+    this.resumeSignal = (this.resumeSignal || 0) + 1;
+    this.logger.info('▶ Resume requested — the paused ticket(s) continue in their own Claude conversation now.');
+    return true;
   }
 
   requestStop() {
@@ -104,7 +112,9 @@ export class TicketResolver extends EventEmitter {
       if (cfg.only?.length) queue = queue.filter((q) => cfg.only.includes(q.id));
       if (!cfg.force) {
         const before = queue.length;
-        queue = queue.filter((q) => !DONE_OUTCOMES.has(this.state.get(q.id)?.outcome));
+        const reopened = queue.filter((q) => this.reopenedSinceHandled(q));
+        queue = queue.filter((q) => !this.alreadyHandled(q));
+        if (reopened.length) this.logger.info(`${reopened.length} ticket(s) were moved back to ${[...new Set(reopened.map((q) => q.stage))].join('/')} after an earlier run handled them — picking them again: ${reopened.map((q) => q.id).join(', ')}`);
         if (before !== queue.length) this.logger.info(`${before - queue.length} ticket(s) already handled in an earlier run (use --force to redo).`);
       }
       if (cfg.limit > 0) queue = queue.slice(0, cfg.limit);
@@ -777,27 +787,66 @@ The worktree is gone — work here now. The bench runs this code, and bench comm
           continue;
         }
         if (!e.usageLimit) throw e;
-        const until = e.resetsAt;
-        const wait = until ? until.getTime() - Date.now() + (this.usageLimitMarginMs ?? 2 * 60000) : null;
-        if (!this.cfg.waitOnUsageLimit || !wait || wait > MAX_USAGE_LIMIT_WAIT_MS) {
-          this.logger.error(`${e.message}. Stopping the run; ${id} and the rest are left for the next run (nothing was marked failed).`);
-          this.status.error = 'Claude usage limit reached — run stopped; re-run after the limit resets.';
-          return null;
-        }
-        const resumeAt = new Date(Date.now() + wait); // the reported reset time plus a safety margin
-        this.logger.warn(`⏸ ${e.message}. Pausing until ${resumeAt.toLocaleString()} (reset ${until.toLocaleTimeString()} + margin), then retrying ${id}.`);
-        const phase = this.status.phase;
-        this.status.phase = 'paused';
-        this.status.pausedUntil = resumeAt.toISOString();
-        if (this.ic.current) this.ic.current.step = `paused for Claude usage limit — resumes at ${resumeAt.toLocaleTimeString()}`;
-        const end = Date.now() + wait;
-        while (Date.now() < end && !this.stopRequested) await new Promise((r) => setTimeout(r, Math.min(30000, end - Date.now())));
-        this.status.phase = phase;
-        delete this.status.pausedUntil;
-        if (this.stopRequested) return null;
-        this.logger.info(`▶ Resuming after the usage-limit pause: retrying ${id}.`);
+        // Normally ask() already paused and resumed inside the same conversation; this is the "stop" case (no reset
+        // time, too far away, or Stop pressed) or a limit hit outside a Claude turn: the ticket was saved as interrupted.
+        if (e.stopRun || this.stopRequested) return null;
+        if ((await this.pauseForUsageLimit(e, id)) === 'stop') return null;
+        this.logger.info(`▶ Retrying ${id} after the usage-limit pause.`);
       }
     }
+  }
+
+  /**
+   * Waits out a usage limit: until the reported reset time (+ margin), or until requestResume() (dashboard "Resume
+   * now", "r" + Enter, SIGUSR1). Returns 'resume', or 'stop' when it cannot wait (no reset time, too far, Stop pressed).
+   */
+  async pauseForUsageLimit(e, id) {
+    const until = e.resetsAt;
+    const wait = until ? until.getTime() - Date.now() + (this.usageLimitMarginMs ?? 2 * 60000) : null;
+    if (!this.cfg.waitOnUsageLimit || !wait || wait > MAX_USAGE_LIMIT_WAIT_MS) {
+      this.logger.error(`${e.message}. Stopping the run; ${id} and the rest are left for the next run (nothing was marked failed).`);
+      this.status.error = 'Claude usage limit reached — run stopped; re-run after the limit resets.';
+      return 'stop';
+    }
+    const resumeAt = new Date(Date.now() + wait); // the reported reset time plus a safety margin
+    this.logger.warn(`${this.tag}⏸ ${e.message}. Pausing ${id} until ${resumeAt.toLocaleString()} (reset ${until.toLocaleTimeString()} + margin); ` +
+      `it then continues in the same Claude conversation. To resume earlier (e.g. after switching Claude account): "Resume now" on the dashboard, ` +
+      `or type r + Enter in this terminal, or kill -USR1 ${process.pid}.`);
+    // Several items can pause together (parallel mode): the run is "paused" while at least one of them is.
+    if (!this.pausedCount) this.phaseBeforePause = this.status.phase;
+    this.pausedCount = (this.pausedCount || 0) + 1;
+    this.status.phase = 'paused';
+    if (!this.status.pausedUntil || resumeAt.toISOString() > this.status.pausedUntil) this.status.pausedUntil = resumeAt.toISOString();
+    const stepBefore = this.ic.current?.step;
+    if (this.ic.current) this.ic.current.step = `paused for Claude usage limit — resumes at ${resumeAt.toLocaleTimeString()}`;
+    const end = Date.now() + wait;
+    const signal = this.resumeSignal || 0; // requestResume() bumps it: every paused item resumes at once
+    while (Date.now() < end && !this.stopRequested && (this.resumeSignal || 0) === signal) {
+      await new Promise((r) => setTimeout(r, Math.min(1000, end - Date.now())));
+    }
+    const manual = (this.resumeSignal || 0) !== signal;
+    this.pausedCount -= 1;
+    if (!this.pausedCount) {
+      if (this.status.phase === 'paused') this.status.phase = this.phaseBeforePause || 'running';
+      delete this.status.pausedUntil;
+    }
+    if (this.ic.current && stepBefore) this.ic.current.step = stepBefore;
+    if (this.stopRequested) return 'stop';
+    this.logger.info(`${this.tag}▶ Resuming ${id} ${manual ? 'manually' : 'after the usage-limit pause'}.`);
+    return 'resume';
+  }
+
+  /**
+   * A ticket an earlier run finished (resolved / clarification / no change) and moved to a stage — To Test or Review —
+   * that a person has since moved back to a pickable stage (Open, Reopened, …): that is new work, so it is picked again.
+   */
+  reopenedSinceHandled(q) {
+    const r = this.state.get(q.id);
+    return Boolean(r && DONE_OUTCOMES.has(r.outcome) && r.stageAfter && norm(r.stageAfter) !== norm(q.stage));
+  }
+
+  alreadyHandled(q) {
+    return DONE_OUTCOMES.has(this.state.get(q.id)?.outcome) && !this.reopenedSinceHandled(q);
   }
 
   /** For every ticket named in --only that did not make it into the queue, logs why. */
@@ -815,7 +864,7 @@ The worktree is gone — work here now. The bench runs this code, and bench comm
         if (!isPickable(f, this.cfg.pickStatuses)) why = `its stage is "${f.stage || f.status}", not one of ${this.cfg.pickStatuses.join('/')}`;
         else if (!passesPeopleFilters(f, this.cfg, this.hub.user)) why = `excluded by the assignee/created-by filter (assigned to ${(f.assignees || []).join(', ') || 'nobody'}, created by ${f.createdByName || f.createdBy})`;
         else if (skippedWhy.has(id)) why = skippedWhy.get(id);
-        else if (DONE_OUTCOMES.has(this.state.get(id)?.outcome)) why = `already handled in an earlier run (${this.state.get(id).outcome}) — tick "Redo" / use --force`;
+        else if (this.alreadyHandled({ id, stage: f.stage })) why = `already handled in an earlier run (${this.state.get(id).outcome}) — tick "Redo" / use --force`;
         else if (this.cfg.limit > 0) why = `cut off by the max-tickets limit (${this.cfg.limit})`;
         else why = 'not picked for an unknown reason';
       }
@@ -844,7 +893,9 @@ The worktree is gone — work here now. The bench runs this code, and bench comm
         if (slug.length > 60) slug = slug.slice(0, 61).replace(/-[^-]*$/, ''); // cut at a word boundary
         return { ...f, id: `PREEXISTING-${slug}`, slug, subject: `Pre-existing test failure: ${f.text.split(/\s+\(/)[0].slice(0, 120)}` };
       })
-      .filter((f) => this.cfg.force || !DONE_OUTCOMES.has(this.state.get(f.id)?.outcome));
+      // "Redo" re-runs tickets; re-checking failures already fixed or found passing only happens when asked for
+      // explicitly (fix-failures with --force).
+      .filter((f) => (this.cfg.force && this.cfg.onlyPreexisting) || !DONE_OUTCOMES.has(this.state.get(f.id)?.outcome));
   }
 
   /** Fixes each pre-existing failure on its own branch, through the same pipeline as tickets (no Hub involved). */
@@ -1069,13 +1120,33 @@ ${tail(output, 4000)}
     fs.appendFileSync(path.join(out, `${path.basename(dir)}.md`), entry);
   }
 
+  /**
+   * One Claude turn. A usage limit mid-turn pauses right here — branch, uncommitted files and Claude's conversation all
+   * stay as they are — and the same conversation is told to carry on when the pause ends (at the reset time, or
+   * manually). It never switches to a new session: if it is limited again, it simply pauses again.
+   */
+  async sendThroughLimits(session, prompt, timeoutMs) {
+    const id = this.ic.current?.id || 'the current ticket';
+    let message = prompt;
+    for (;;) {
+      try {
+        return await session.send(message, { timeoutMs });
+      } catch (e) {
+        if (!e.usageLimit) throw e;
+        if ((await this.pauseForUsageLimit(e, id)) === 'stop') { e.stopRun = true; throw e; }
+        message = 'The usage limit has reset. Continue exactly where you left off on the same task (nothing in the working ' +
+          'tree was changed while you were paused), and finish with the RESULT_JSON block as instructed.';
+      }
+    }
+  }
+
   async ask(session, prompt, timeoutMs) {
-    let reply = await session.send(prompt, { timeoutMs });
+    let reply = await this.sendThroughLimits(session, prompt, timeoutMs);
     this.recordReply(prompt, reply);
     let result = parseResult(reply);
     if (!result) {
       const retry = 'Your last reply did not end with a valid <<<RESULT_JSON … RESULT_JSON>>> block. Reply now with only that block for the current ticket.';
-      reply = await session.send(retry, { timeoutMs: 5 * 60000 });
+      reply = await this.sendThroughLimits(session, retry, 5 * 60000);
       this.recordReply(retry, reply);
       result = parseResult(reply);
     }

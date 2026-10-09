@@ -64,7 +64,7 @@
     </div>
     <div class="row">
       <label class="check"><input type="checkbox" id="hubWrite" checked /> Update Hub (stages + clarification comments)</label>
-      <label class="check"><input type="checkbox" id="force" /> Redo tickets handled in earlier runs</label>
+      <label class="check" title="Tickets moved back to Open/Reopened after a run handled them are picked again automatically; this re-runs the others too. Pre-existing failures already fixed or passing are not re-checked (use 'Fix pre-existing failures only' with this ticked for that)."><input type="checkbox" id="force" /> Redo tickets handled in earlier runs</label>
       <label class="check"><input type="checkbox" id="fixPre" checked /> Fix pre-existing test failures after the tickets</label>
     </div>
     <div class="row">
@@ -201,8 +201,17 @@ async function poll() {
     const banner = $('errorBanner');
     if (s.phase === 'paused' && s.pausedUntil) {
       banner.hidden = false; banner.style.color = 'var(--warn)'; banner.style.borderColor = 'var(--warn)';
-      banner.textContent = `⏸ Paused: Claude usage limit reached. Resuming automatically at ${new Date(s.pausedUntil).toLocaleTimeString()}.`;
+      if (!banner.querySelector('#resumeNow') || banner.dataset.until !== s.pausedUntil) {
+        banner.dataset.until = s.pausedUntil;
+        banner.innerHTML = `⏸ Paused: Claude usage limit reached. Resuming automatically at ${esc(new Date(s.pausedUntil).toLocaleTimeString())}. ` +
+          `<button id="resumeNow" style="margin-left:8px">Resume now</button> <span class="muted">(continues in the same Claude conversation — e.g. after switching Claude account)</span>`;
+        $('resumeNow').onclick = async () => {
+          try { await post('/api/runs/current/resume', {}); $('msg').textContent = 'Resuming…'; }
+          catch (e) { $('msg').textContent = e.message; }
+        };
+      }
     } else if (s.error) {
+      delete banner.dataset.until;
       banner.hidden = false; banner.style.color = 'var(--bad)'; banner.style.borderColor = 'var(--bad)';
       banner.textContent = `⚠ ${s.error}`;
     } else banner.hidden = true;

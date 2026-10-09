@@ -129,6 +129,12 @@ app.get('/api/locks', (_req, res) => {
   res.json(Object.values(byPid).map((r) => ({ ...r, mine: r.pid === process.pid })));
 });
 
+// Ends a usage-limit pause now (e.g. after switching the Claude account on this machine).
+app.post('/api/runs/current/resume', (_req, res) => {
+  const resumed = active?.resolver.requestResume() || false;
+  res.status(resumed ? 200 : 409).json(resumed ? { ok: true } : { error: 'Nothing is paused right now.' });
+});
+
 app.post('/api/runs/current/stop', (_req, res) => {
   active?.resolver.requestStop();
   res.json({ ok: true });
