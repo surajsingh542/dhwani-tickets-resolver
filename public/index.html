@@ -53,7 +53,7 @@
       <div><label for="model">Claude model (optional)</label><input id="model" placeholder="CLI default, e.g. claude-opus-5-5" /></div>
       <div><label for="testCommand">Test command (optional gate)</label><input id="testCommand" placeholder="npm test" /></div>
       <div><label for="limit">Max tickets (0 = all)</label><input id="limit" type="number" min="0" value="0" /></div>
-      <div><label for="only">Only these tickets (optional)</label><input id="only" placeholder="TASK-2026-02411, TASK-2026-02617" /></div>
+      <div><label for="only" title="Named tickets are picked even if their priority or type is unticked or not set">Only these tickets (optional, ignores priority/type)</label><input id="only" placeholder="TASK-2026-02411, TASK-2026-02617" /></div>
       <div><label for="progress">Progress summary every N min (0 = off)</label><input id="progress" type="number" min="0" value="5" /></div>
     </div>
     <div style="margin-top:12px">

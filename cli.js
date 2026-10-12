@@ -18,6 +18,7 @@ Usage:
                   [--types "Bug,Enhancement"] [--priorities "P0,P1"] [--stages "Open,Reopened,Planned"]
                   [--parallel] [--max-concurrent N] [--shared-session]
       Each ticket gets its own fresh Claude conversation (fewer tokens); --shared-session keeps one for the whole run.
+      --only tickets are picked even without a priority/type (stage and people filters still apply).
       --force re-runs tickets already handled; tickets moved back to Open/Reopened after a run are picked again without it.
       Pre-existing failures already fixed or passing are only re-checked by "fix-failures --force".
       --types / --priorities: only these ticket types / priorities this run (pick order unchanged).

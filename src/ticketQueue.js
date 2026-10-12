@@ -2,7 +2,7 @@
  * Turns the raw project task list into the ordered work queue:
  *   P0 Bug → P0 Enhancement → P0 Change Request → P0 Feature → P0 Task → P1 … → P2 …
  * Only tickets whose stage/status is one of the pick statuses (Open / Reopen) are taken,
- * and tickets with no priority are never picked.
+ * and tickets with no priority are only picked when "none" is listed or the ticket is named explicitly (--only).
  */
 
 export const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -81,6 +81,9 @@ export function isPickable(f, pickStatuses) {
   return allowed.has(norm(f.stage || f.status));
 }
 
+// Position in the pick order; values not listed (only possible for explicitly named tickets) go last.
+const rank = (list, v) => (list.includes(v) ? list.indexOf(v) : list.length);
+
 /**
  * @returns {{ queue: object[], skipped: {id, subject, reason}[] }}
  */
@@ -92,15 +95,20 @@ export function buildQueue(rows, cfg, me) {
     const f = fieldsOf(row);
     if (!isPickable(f, cfg.pickStatuses)) continue; // not Open/Reopen: not our concern, don't report
     if (!passesPeopleFilters(f, cfg, me)) { filteredOut++; continue; } // --assignee / --created-by
-    const p = priorityKey(f.priority, cfg.priorities);
+    // A ticket named explicitly (--only / "Only these tickets") is not dropped for its priority or type: those
+    // filters decide what the run picks by itself. Stage and people filters still apply.
+    const named = cfg.only?.includes(f.id);
+    let p = priorityKey(f.priority, cfg.priorities);
+    if (!p && named) p = String(f.priority ?? '').match(/p\s*-?\s*(\d)/i) ? `P${String(f.priority).match(/(\d)/)[1]}` : NO_PRIORITY;
     if (!p) { skipped.push({ ...f, reason: f.priority ? `priority "${f.priority}" not in ${cfg.priorities.join('/')}` : `no priority assigned (add "none" to the priorities to include these)` }); continue; }
-    const t = typeRank(f.type, cfg.typeOrder);
+    let t = typeRank(f.type, cfg.typeOrder);
+    if (t < 0 && named) t = cfg.typeOrder.length;
     if (t < 0) { skipped.push({ ...f, reason: f.type ? `type "${f.type}" not in ${cfg.typeOrder.join('/')}` : 'no type set (add "none" to the types to include these)' }); continue; }
     queue.push({ ...f, priorityKey: p, typeRank: t, row });
   }
   queue.sort(
     (a, b) =>
-      cfg.priorities.indexOf(a.priorityKey) - cfg.priorities.indexOf(b.priorityKey) ||
+      rank(cfg.priorities, a.priorityKey) - rank(cfg.priorities, b.priorityKey) ||
       a.typeRank - b.typeRank ||
       // The task list carries no creation date; Hub IDs (TASK-YYYY-NNNNN) are sequential, so oldest first.
       String(a.id).localeCompare(String(b.id), undefined, { numeric: true }),
