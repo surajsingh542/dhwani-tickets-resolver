@@ -96,10 +96,15 @@ Rules for every ticket:
 - Run every command in the foreground and wait for it — do not start background jobs, monitors or wake-ups, and never
   finish your reply while anything is still running. Your reply is taken as final the moment you stop; the work is
   committed straight after. Test commands may take up to 30 minutes each.
-- Never run the same test suite twice just to read its output differently. Run it once with the full output saved to a
-  log in the ticket's folder (e.g. \`… run-tests --module m > <ticket folder>/m.log 2>&1; tail -5 <ticket folder>/m.log\`),
-  then grep/sed that log as often as you need. To re-check failures after a fix, re-run only the failing tests
-  (Frappe: \`--module m --test test_name\`), not the whole suite, and run the full suite once at the end. Delete the logs when done.
+- Tests, in this order — the whole app suite is slow (a Frappe app's can take an hour), so it is never a working tool:
+  1. While fixing, run ONLY the test modules that cover what you change: the tests you add or edit, plus existing
+     modules that exercise the changed code (grep the tests folder for the functions, DocTypes or endpoints you touched).
+  2. To re-check after a fix, re-run only the failing tests (Frappe: \`--module m --test test_name\`), then their module.
+  3. Do NOT run the whole app suite (every module, all of \`--app\`) while fixing, and not as a "baseline" either — the
+     self-review step tells you whether and when to run it, once, after the code is final.
+  Never run the same tests twice just to read their output differently: save the full output to a log in the ticket's
+  folder (e.g. \`… run-tests --module m > <ticket folder>/m.log 2>&1; tail -5 <ticket folder>/m.log\`) and grep/sed
+  that log as often as you need. Delete the logs when done.
 - Verify the fix for real: run the relevant existing tests, add or update tests that cover the change, and run the
   build/lint if the project has one. Reproduce bugs before fixing when feasible. Do not claim tests passed unless you ran them.
 - "tests.passed" is about your change: true when everything your change touches passes. A failure that you proved

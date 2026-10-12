@@ -7,7 +7,8 @@
     "start": "node server.js",
     "resolve": "node cli.js run",
     "inspect": "node cli.js inspect",
-    "preview": "node cli.js preview"
+    "preview": "node cli.js preview",
+    "test": "node --test test/*.test.js"
   },
   "license": "UNLICENSED",
   "type": "module",

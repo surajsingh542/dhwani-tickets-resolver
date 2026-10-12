@@ -33,8 +33,12 @@ each have their own git (`bench/apps/<app>/.git`). Dependency and runtime folder
    - `claude_replies.md`: every prompt and reply for the ticket, for auditing
 3. **Resolve.** It pulls `origin/development` into the local `development` (fast-forward when possible, otherwise a
    local merge; a conflict or a failed fetch stops the run), then creates branch `<ticket-id>` from `development` in every repo and sends the ticket to the Claude session.
-   Claude reads the context (including images and PDFs), implements the change, adds tests and runs them.
+   Claude reads the context (including images and PDFs), implements the change, adds tests and runs only the test
+   modules that cover the change (a Frappe app's whole suite can take an hour, so it is never run while fixing).
    By default, a second turn makes Claude review its own diff against every requirement before anything is committed.
+   That review is where the whole app suite runs, once, after the code is final. It is skipped in parallel mode (the
+   merge queue would wait on it), for pre-existing-failure fixes, and when `TEST_COMMAND`/`TEST_COMMANDS` is set (the
+   gate below runs it instead).
 4. **Gate.** You can set `TEST_COMMAND` (for example `npm test`), or per-repo commands in `TEST_COMMANDS`. The
    orchestrator runs it in every changed repo on the ticket branch, and Claude gets `MAX_FIX_ATTEMPTS` tries to fix
    failures. It runs again on `development` after the merge; if it fails there, the merge is undone.

@@ -285,7 +285,7 @@ export class TicketResolver extends EventEmitter {
     const out = await this.workItem({
       session, repos, item, record, branch, workDir: ctx.dir, parallel,
       prompt: this.ticketPrompt(item, ctx, branch),
-      verifyPrompt: this.verifyPrompt(item),
+      verifyPrompt: this.verifyPrompt(item, { fullSuite: !parallel }),
       commitTitle: `${item.id}: ${item.subject}`,
       onClarification: (rec, result, abandon) => this.handleClarification(item, rec, result, stageOptions, abandon),
       onNoChange: (rec, result, abandon) => this.handleNoChange(item, rec, result, stageOptions, abandon),
@@ -696,7 +696,7 @@ The worktree is gone — work here now. The bench runs this code, and bench comm
       if (!failures.length) break;
       if (attempt >= cfg.maxFixAttempts) return abandon('failed', { result, error: failures.map((f) => `${f.repo}: \`${f.cmd}\` failed\n${tail(f.output, 2000)}`).join('\n\n') });
       this.step('claude: fixing test failures');
-      result = await this.ask(session, `The project tests failed after your change. Fix the cause (do not weaken or skip tests), re-run them, and reply with the RESULT_JSON again.\n\n${failures.map((f) => `Repo ${f.repo} (${f.dir}) — \`${f.cmd}\`:\n\`\`\`\n${tail(f.output, 6000)}\n\`\`\``).join('\n\n')}`, timeoutMs);
+      result = await this.ask(session, `The project tests failed after your change. Fix the cause (do not weaken or skip tests), re-run only the failing tests and their modules (the orchestrator re-runs the full command afterwards), and reply with the RESULT_JSON again.\n\n${failures.map((f) => `Repo ${f.repo} (${f.dir}) — \`${f.cmd}\`:\n\`\`\`\n${tail(f.output, 6000)}\n\`\`\``).join('\n\n')}`, timeoutMs);
       if (result.status !== 'resolved') return abandon('failed', { result, error: `Could not fix failing tests: ${result.summary || ''}` });
       changed = await repos.changedRepos();
     }
@@ -1178,13 +1178,28 @@ ${previousNote}Ticket folder: ${ctx.dir}
 ${brief}`;
   }
 
-  verifyPrompt(item) {
+  /**
+   * Self-review turn — the last thing Claude does before the commit, so it is where the whole app suite runs, once.
+   * Not in parallel mode (this turn runs inside the merge queue, which everyone waits on), not for pre-existing-failure
+   * fixes (they touch one test), and not when the orchestrator's own TEST_COMMAND gate is about to run the suite anyway.
+   */
+  verifyPrompt(item, { fullSuite = false } = {}) {
+    const gated = Boolean(this.cfg.testCommand) || Object.keys(this.cfg.testCommands || {}).length > 0;
+    const tests = fullSuite && !gated
+      ? `- Tests: first finish every code fix this review needs and re-run the affected test modules. Then, as the very last
+  step, run the whole test suite of each app you changed ONCE (save its output to a log in the ticket folder; split it
+  into batches of modules if it would not finish within one command's time limit). Do not run it before the code is
+  final and do not run it a second time: if it shows a failure your change caused, fix it and re-run only the failing
+  tests and their module. A failure that does not involve your change goes in tests.preexisting_failures.`
+      : `- Tests: re-run only the test modules that cover this change, and only if you edited code during this review or they
+  have not passed since your last edit. Do not run the whole app suite${gated ? ' — the orchestrator runs it right after this step' : ''}.`;
     return `Before ${item.id} is committed, review your work critically as a strict reviewer would:
 - Run \`git status\` and \`git diff\` in every repository you changed and read the complete change.
 - Re-read the ticket (description, checklist, latest discussion) and check each requirement against the diff.
 - Check edge cases and that nothing unrelated changed; remove debug code and scratch files.
-- Confirm the tests you ran exercise this change; re-run them now.
-Fix anything missing and re-test. Then reply with the RESULT_JSON block: status "resolved" only if every requirement is met and tests pass,
+- Confirm the tests you ran exercise this change.
+${tests}
+Then reply with the RESULT_JSON block: status "resolved" only if every requirement is met and tests pass,
 with requirements_check filled in. Use "needs_clarification" if review revealed a real ambiguity, or "failed" if it cannot be completed — in both cases the orchestrator discards the working-tree changes.`;
   }
 
